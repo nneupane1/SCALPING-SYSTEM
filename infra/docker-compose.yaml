@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    container_name: scalping-system-backend
+    working_dir: /app
+    command: python main_paper.py
+    environment:
+      TRADING_SYSTEM_CONFIG: backend/app/config/system.example.yaml
+    volumes:
+      - ..:/app
+    ports:
+      - "8000:8000"
+

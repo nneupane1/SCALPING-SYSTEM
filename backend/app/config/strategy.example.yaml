@@ -1,0 +1,80 @@
+scanner:
+  min_impulse_body_ratio: 1.5
+  min_volume_ratio: 1.2
+  max_pullback_depth_ratio: 0.8
+  max_pullback_body_ratio: 0.75
+  min_pullback_bars: 1
+  max_pullback_bars: 3
+  compression_lookback: 5
+
+strategy:
+  name: pullback_scalp
+  allow_long: true
+  allow_short: true
+  trigger:
+    require_breakout_close: true
+    min_close_position: 0.7
+    min_body_ratio: 1.2
+    stop_buffer_ratio: 0.05
+
+filters:
+  require_vwap_alignment: false
+  require_ema_alignment: false
+
+profiles:
+  5m:
+    execution_timeframe: 5m
+    description: >
+      Fast-expression profile for repeated intraday participation. This profile
+      accepts slightly noisier market structure in exchange for a higher setup
+      count, while keeping the same momentum -> pullback -> continuation logic.
+    scanner:
+      min_impulse_body_ratio: 1.35
+      min_volume_ratio: 1.15
+      max_pullback_depth_ratio: 0.75
+      max_pullback_body_ratio: 0.8
+      min_pullback_bars: 1
+      max_pullback_bars: 3
+      compression_lookback: 6
+    trigger:
+      require_breakout_close: true
+      min_close_position: 0.65
+      min_body_ratio: 1.15
+      stop_buffer_ratio: 0.04
+    cadence:
+      expected_trades_per_day_low: 8
+      expected_trades_per_day_high: 15
+      expected_holding_bars_low: 2
+      expected_holding_bars_high: 8
+      runner_emphasis: secondary
+      operator_focus: >
+        Favors repetition, quick feedback, and a rhythm closer to a high-engagement
+        intraday workflow.
+  15m:
+    execution_timeframe: 15m
+    description: >
+      Slow-expression profile for cleaner continuation structure. This profile is
+      more selective, demands stronger momentum, and expects fewer but more
+      substantial trades.
+    scanner:
+      min_impulse_body_ratio: 1.6
+      min_volume_ratio: 1.25
+      max_pullback_depth_ratio: 0.85
+      max_pullback_body_ratio: 0.7
+      min_pullback_bars: 1
+      max_pullback_bars: 4
+      compression_lookback: 5
+    trigger:
+      require_breakout_close: true
+      min_close_position: 0.72
+      min_body_ratio: 1.25
+      stop_buffer_ratio: 0.05
+    cadence:
+      expected_trades_per_day_low: 2
+      expected_trades_per_day_high: 5
+      expected_holding_bars_low: 3
+      expected_holding_bars_high: 10
+      runner_emphasis: primary
+      operator_focus: >
+        Favors patience, selectivity, and tolerance for longer inactive periods
+        between setups.

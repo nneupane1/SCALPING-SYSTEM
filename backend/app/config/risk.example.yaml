@@ -1,0 +1,18 @@
+risk:
+  risk_per_trade: 0.005
+  max_open_positions: 1
+  max_daily_loss_r: 3.0
+  max_consecutive_losses: 4
+  min_stop_distance_ratio: 0.0005
+  max_position_notional: 50000
+
+management:
+  first_partial_at_r: 1.0
+  first_partial_size: 0.5
+  move_stop_to_breakeven_after_first_partial: true
+  trailing_mode: previous_candle_structure
+  trailing_lookback_bars: 1
+
+execution:
+  allow_live_orders: false
+  max_slippage_bps: 5
