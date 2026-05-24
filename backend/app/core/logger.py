@@ -12,9 +12,20 @@ def configure_logging(debug: bool = False) -> logging.Logger:
     """Configure and return the project logger."""
 
     level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
-    return logging.getLogger(LOGGER_NAME)
+    root = logging.getLogger()
+    root.setLevel(logging.WARNING)
 
+    logger = logging.getLogger(LOGGER_NAME)
+    logger.setLevel(level)
+    logger.propagate = False
+
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+        )
+        logger.addHandler(handler)
+
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("requests").setLevel(logging.WARNING)
+    return logger

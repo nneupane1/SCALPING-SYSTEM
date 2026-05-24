@@ -137,8 +137,14 @@ class OpenPosition:
     realized_pnl: float = 0.0
     first_partial_taken: bool = False
     first_partial_fill_price: float | None = None
+    bars_held: int = 0
+    best_r_multiple: float = 0.0
+    worst_r_multiple: float = 0.0
+    first_target_hit_after_bars: int | None = None
+    follow_through_state: str = "developing"
     closed_at: datetime | None = None
     closed_reason: str | None = None
+    broker_metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def initial_risk_amount(self) -> float:
@@ -183,6 +189,8 @@ class ClosedTrade:
     realized_r: float
     reason: str
     notes: tuple[str, ...] = ()
+    tags: tuple[str, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -214,4 +222,3 @@ class PortfolioSnapshot:
         if self.closed_trade_count == 0:
             return 0.0
         return self.win_count / self.closed_trade_count
-

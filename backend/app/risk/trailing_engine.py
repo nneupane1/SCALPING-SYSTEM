@@ -23,6 +23,10 @@ class TrailingEngine:
             return ()
 
         latest = candles[-1]
+        position.bars_held += 1
+        current_r = position.current_r_multiple(latest.close)
+        position.best_r_multiple = max(position.best_r_multiple, current_r)
+        position.worst_r_multiple = min(position.worst_r_multiple, current_r)
         decisions: list[ManagementDecision] = []
 
         if self._stop_breached(position, latest):
@@ -35,6 +39,14 @@ class TrailingEngine:
             )
 
         if not position.first_partial_taken and self._first_target_reached(position, latest):
+            position.first_target_hit_after_bars = position.bars_held
+            if (
+                position.best_r_multiple >= self.risk_config.management.impulsive_move_threshold_r
+                or position.bars_held <= max(1, self.risk_config.management.early_exit_after_bars - 1)
+            ):
+                position.follow_through_state = "impulsive"
+            else:
+                position.follow_through_state = "balanced"
             partial_quantity = position.initial_quantity * position.risk_plan.first_partial_fraction
             decisions.append(
                 ManagementDecision(
@@ -53,6 +65,15 @@ class TrailingEngine:
                     )
                 )
             return tuple(decisions)
+
+        if not position.first_partial_taken and self._should_exit_early(position, latest):
+            return (
+                ManagementDecision(
+                    action=ManagementAction.EXIT,
+                    reason="early failure exit due to missing follow-through",
+                    price=latest.close,
+                ),
+            )
 
         if position.first_partial_taken:
             candidate = self._structural_trailing_stop(position, candles)
@@ -82,6 +103,8 @@ class TrailingEngine:
         candles: tuple[Candle, ...],
     ) -> float | None:
         lookback = self.risk_config.management.trailing_lookback_bars
+        if position.follow_through_state == "impulsive":
+            lookback = max(lookback, self.risk_config.management.impulsive_trailing_lookback_bars)
         if len(candles) <= lookback:
             return None
         reference = candles[-1 - lookback]
@@ -95,3 +118,10 @@ class TrailingEngine:
             return candidate
         return None
 
+    def _should_exit_early(self, position: OpenPosition, latest: Candle) -> bool:
+        if position.bars_held < self.risk_config.management.early_exit_after_bars:
+            return False
+        if position.best_r_multiple >= self.risk_config.management.early_exit_min_progress_r:
+            return False
+        current_r = position.current_r_multiple(latest.close)
+        return current_r <= self.risk_config.management.early_exit_max_adverse_close_r

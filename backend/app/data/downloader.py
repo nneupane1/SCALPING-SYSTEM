@@ -33,9 +33,25 @@ def _fmt_duration(seconds: float) -> str:
 class MarketDataDownloader:
     """Disk-backed market-data access with resumable partial files."""
 
-    def __init__(self, config: ConfigBundle, client: BinanceRestClient | None = None) -> None:
+    def __init__(
+        self,
+        config: ConfigBundle,
+        client: BinanceRestClient | None = None,
+        progress_callback=None,
+    ) -> None:
         self.config = config
         self.client = client or BinanceRestClient(config=config)
+        self.progress_callback = progress_callback
+
+    def _emit(self, event_type: str, **payload: object) -> None:
+        if callable(self.progress_callback):
+            self.progress_callback(event_type, **payload)
+
+    def _log(self, message: str, *, level: str = "info") -> None:
+        if callable(self.progress_callback):
+            self._emit("event", level=level, message=message)
+            return
+        print(message)
 
     @staticmethod
     def _to_utc_ms(value: str | pd.Timestamp) -> int:
@@ -66,6 +82,7 @@ class MarketDataDownloader:
         *,
         closed_only: bool = True,
         now_ms: int | None = None,
+        announce_removed: bool = True,
     ) -> pd.DataFrame:
         if not raw:
             raise ValueError("No kline data returned from Binance")
@@ -94,7 +111,7 @@ class MarketDataDownloader:
             before = len(df)
             df = df[df["close_time"] <= now_ms]
             removed = before - len(df)
-            if removed:
+            if removed and announce_removed:
                 print(f"Removed {removed} still-forming Binance candle(s)")
             if df.empty:
                 raise ValueError("No closed kline data returned from Binance")
@@ -231,8 +248,29 @@ class MarketDataDownloader:
         checkpoint_store = JsonCheckpointStore(paths["checkpoint"])
 
         if download_cfg.resume_enabled and paths["final"].exists():
-            print("\nCompleted historical file already exists.")
-            print(f"Using cached file: {paths['final']}")
+            self._emit(
+                "phase",
+                status="cached",
+                phase="using cached historical file",
+                detail=str(paths["final"]),
+            )
+            self._emit(
+                "progress",
+                description=f"Loading cached {symbol} {interval}",
+                completed=1,
+                total=1,
+                status="cached",
+            )
+            self._emit(
+                "metrics",
+                metrics={
+                    "symbol": symbol,
+                    "interval": interval,
+                    "range": f"{start_date} -> {end_date}",
+                    "storage": paths["final"],
+                },
+            )
+            self._log("Completed historical file already exists.", level="success")
             return self.load_from_csv(paths["final"])
 
         bootstrap_source = None
@@ -258,13 +296,27 @@ class MarketDataDownloader:
         total_batches = int(checkpoint.get("batches_downloaded", 0)) if checkpoint else 0
         total_rows = max(int(checkpoint.get("rows_downloaded", 0)) if checkpoint else 0, int(partial_summary["rows"]))
 
-        print(f"\nStarting download: {symbol} | {interval}")
-        print(f"Range: {start_date} -> {end_date}")
-        print(f"TLS verify: {self.client.describe_verify_mode()}")
+        self._emit(
+            "phase",
+            status="running",
+            phase="downloading historical candles",
+            detail=f"{symbol} {interval} | {start_date} -> {end_date}",
+        )
+        self._emit(
+            "metrics",
+            metrics={
+                "symbol": symbol,
+                "interval": interval,
+                "range": f"{start_date} -> {end_date}",
+                "tls_verify": self.client.describe_verify_mode(),
+                "batches": total_batches,
+                "rows": total_rows,
+            },
+        )
         if bootstrap_source is not None:
-            print(f"Bootstrap source: {bootstrap_source.name}")
+            self._log(f"Bootstrap source: {bootstrap_source.name}", level="success")
         if current_start > start_ts:
-            print(f"Resume point: {_fmt(current_start)} | Existing rows: {total_rows}")
+            self._log(f"Resume point: {_fmt(current_start)} | Existing rows: {total_rows}", level="warning")
 
         start_clock = time.time()
         total_range_ms = max(1, end_ts - start_ts)
@@ -272,9 +324,22 @@ class MarketDataDownloader:
             while current_start < end_ts:
                 batch_start = time.time()
                 request_batch_number = total_batches + 1
-                print(
-                    f"\nRequesting batch {request_batch_number} | from {_fmt(current_start)} "
-                    f"| limit={self.config.system.binance.historical_limit}"
+                self._emit(
+                    "progress",
+                    description=f"Downloading {symbol} {interval}",
+                    completed=max(0, current_start - start_ts),
+                    total=total_range_ms,
+                    status="running",
+                )
+                self._emit(
+                    "metrics",
+                    metrics={
+                        "batch": request_batch_number,
+                        "request_from": _fmt(current_start),
+                        "limit": self.config.system.binance.historical_limit,
+                        "rows": total_rows,
+                        "batches": total_batches,
+                    },
                 )
                 try:
                     raw = self.client.get_klines(
@@ -301,16 +366,23 @@ class MarketDataDownloader:
                             "updated_at": datetime.now(timezone.utc).isoformat(),
                         }
                     )
-                    print(f"Download interrupted. Checkpoint saved: {paths['checkpoint']}")
+                    self._emit(
+                        "phase",
+                        status="failed",
+                        phase="download interrupted",
+                        detail=str(paths["checkpoint"]),
+                    )
+                    self._log(f"Download interrupted. Checkpoint saved: {paths['checkpoint']}", level="error")
                     raise
 
                 if not raw:
-                    print("No more data returned from Binance. Stopping.")
+                    self._log("No more data returned from Binance. Stopping.", level="warning")
                     break
 
                 batch_df = self.klines_to_df(
                     raw,
                     closed_only=self.config.system.binance.closed_klines_only,
+                    announce_removed=self.progress_callback is None,
                 )
                 self._append_batch(paths["partial"], batch_df)
 
@@ -345,14 +417,31 @@ class MarketDataDownloader:
                 progress_pct = min(100, ((last_ts - start_ts) / total_range_ms) * 100)
                 remaining_pct = max(0.01, 100 - progress_pct)
                 eta_seconds = total_time * (remaining_pct / max(progress_pct, 0.0001))
+                self._emit(
+                    "progress",
+                    description=f"Downloading {symbol} {interval}",
+                    completed=max(0, last_ts - start_ts),
+                    total=total_range_ms,
+                    status="running",
+                )
+                self._emit(
+                    "metrics",
+                    metrics={
+                        "batch": total_batches,
+                        "batch_rows": len(batch_df),
+                        "rows": total_rows,
+                        "progress_pct": f"{progress_pct:.2f}%",
+                        "remaining_pct": f"{remaining_pct:.2f}%",
+                        "elapsed": _fmt_duration(total_time),
+                        "eta": _fmt_duration(eta_seconds),
+                        "window": f"{_fmt(first_ts)} -> {_fmt(last_ts)}",
+                    },
+                )
                 if total_batches % download_cfg.status_every_batches == 0 or total_batches == 1:
-                    print(f"Batch {total_batches} saved")
-                    print(f"  Window: {_fmt(first_ts)} -> {_fmt(last_ts)}")
-                    print(f"  Rows this batch: {len(batch_df)} | Total rows: {total_rows}")
-                    print(f"  Progress: {progress_pct:.2f}% | Remaining: {remaining_pct:.2f}%")
-                    print(
-                        f"  Timing: batch {_fmt_duration(batch_time)} | "
-                        f"elapsed {_fmt_duration(total_time)} | ETA {_fmt_duration(eta_seconds)}"
+                    self._log(
+                        f"Batch {total_batches} saved | window {_fmt(first_ts)} -> {_fmt(last_ts)} | "
+                        f"rows {len(batch_df)} | total {total_rows}",
+                        level="info",
                     )
 
                 throttle = self.config.system.binance.throttle_seconds
@@ -362,7 +451,12 @@ class MarketDataDownloader:
             if not paths["partial"].exists():
                 raise FileNotFoundError(f"No partial download file found: {paths['partial']}")
 
-            print("\nDownload loop complete. Finalizing CSV...")
+            self._emit(
+                "phase",
+                status="finalizing",
+                phase="finalizing historical file",
+                detail=str(paths["final"]),
+            )
             df = self._load_partial(paths["partial"])
             before_dedupe = len(df)
             df = df[~df.index.duplicated(keep="last")].sort_index()
@@ -391,10 +485,19 @@ class MarketDataDownloader:
                 paths["partial"].unlink()
 
             total_time = time.time() - start_clock
-            print(f"Saved final CSV: {paths['final']}")
-            print(f"Duplicate rows removed: {duplicates_removed}")
-            print(f"TOTAL TIME: {total_time / 60:.2f} minutes")
-            print(f"Total candles: {len(df)}")
+            self._emit(
+                "complete",
+                status="completed",
+                phase="historical download complete",
+                detail=str(paths["final"]),
+                metrics={
+                    "rows": len(df),
+                    "duplicates_removed": duplicates_removed,
+                    "elapsed_minutes": f"{total_time / 60:.2f}",
+                    "checkpoint": paths["checkpoint"],
+                },
+            )
+            self._log(f"Saved final CSV: {paths['final']}", level="success")
             return df
         finally:
             pass
@@ -405,6 +508,7 @@ class MarketDataDownloader:
         symbol: str | None = None,
         interval: str | None = None,
         limit: int | None = None,
+        verbose: bool = True,
     ) -> pd.DataFrame:
         symbol = (symbol or self.config.system.market.symbol).upper()
         interval = interval or self.config.system.binance.default_interval
@@ -413,22 +517,33 @@ class MarketDataDownloader:
             symbol=symbol,
             interval=interval,
             limit=limit,
-            verbose=True,
+            verbose=verbose,
         )
         return self.klines_to_df(
             raw,
             closed_only=self.config.system.binance.closed_klines_only,
+            announce_removed=self.progress_callback is None,
         )
 
     def load_from_csv(self, filepath: str | Path) -> pd.DataFrame:
         path = Path(filepath)
-        print(f"Loading: {path}")
+        self._emit(
+            "phase",
+            status="running",
+            phase="loading local csv",
+            detail=str(path),
+        )
         start = time.time()
         if not path.exists():
             raise FileNotFoundError(f"CSV file not found: {path}")
         df = pd.read_csv(path, parse_dates=["timestamp"])
         df.set_index("timestamp", inplace=True)
         df = self._validate_ohlcv(df)
-        print(f"Loaded in {time.time() - start:.2f} sec")
+        self._emit(
+            "metrics",
+            metrics={
+                "source_rows": len(df),
+                "load_time_sec": f"{time.time() - start:.2f}",
+            },
+        )
         return df
-

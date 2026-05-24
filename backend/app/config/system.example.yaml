@@ -4,7 +4,7 @@ app:
   debug: true
 
 account:
-  initial_equity: 20000
+  initial_equity: 25000
   base_currency: EUR
 
 market:
@@ -13,7 +13,6 @@ market:
   execution_timeframe: 5m
   context_timeframes:
     - 15m
-    - 1h
   supported_execution_timeframes:
     - 5m
     - 15m
@@ -34,12 +33,18 @@ storage:
   cache_limit: 5000
 
 history:
-  start_date: "2024-01-01"
-  end_date: "2024-03-31"
+  start_date: "2018-01-01"
+  end_date: "2026-05-22"
 
 binance:
   base_url: "https://api.binance.com"
+  websocket_stream_url: "wss://stream.binance.com:9443/stream?streams="
+  websocket_api_url: "wss://ws-api.binance.com:443/ws-api/v3"
   klines_path: "/api/v3/klines"
+  exchange_info_path: "/api/v3/exchangeInfo"
+  order_path: "/api/v3/order"
+  open_orders_path: "/api/v3/openOrders"
+  account_path: "/api/v3/account"
   default_interval: "1m"
   historical_limit: 1000
   recent_limit: 500
@@ -57,6 +62,14 @@ binance:
   ca_bundle_path:
   throttle_seconds: 0.2
   closed_klines_only: true
+  order_submit_retry_attempts: 3
+  order_submit_retry_delay_seconds: 1.0
+  order_fill_timeout_seconds: 4.0
+  user_stream_recv_window: 5000
+  user_stream_reconnect_seconds: 5
+  market_stream_reconnect_seconds: 5
+  stream_inactivity_timeout_seconds: 90
+  exchange_info_cache_seconds: 300
 
 downloads:
   history:
@@ -87,6 +100,28 @@ replay:
   checkpoint_suffix: ".checkpoint.json"
   save_every_steps: 50
   output_dir: "replay/output"
+  resume_enabled: true
+
+paper:
+  enabled: true
+  checkpoint_dir: "_checkpoints"
+  checkpoint_suffix: ".checkpoint.json"
+  output_dir: "paper/output"
+  poll_seconds: 15
+  recent_limit: 500
+  warmup_base_candles: 1000
+  save_every_polls: 1
+  resume_enabled: true
+
+live:
+  enabled: true
+  checkpoint_dir: "_checkpoints"
+  checkpoint_suffix: ".checkpoint.json"
+  output_dir: "live/output"
+  poll_seconds: 15
+  recent_limit: 500
+  warmup_base_candles: 1000
+  save_every_polls: 1
   resume_enabled: true
 
 transport:

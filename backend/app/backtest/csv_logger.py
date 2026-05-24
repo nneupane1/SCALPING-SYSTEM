@@ -24,6 +24,20 @@ class TradeCsvLogger:
         "realized_r",
         "reason",
         "notes",
+        "tags",
+        "market_state",
+        "context_alignment",
+        "session_name",
+        "session_phase",
+        "setup_quality_label",
+        "setup_quality_score",
+        "day_feedback_reason",
+        "day_trade_count",
+        "bars_held",
+        "best_r_multiple",
+        "worst_r_multiple",
+        "first_target_hit_after_bars",
+        "follow_through_state",
     ]
 
     def __init__(self, path: Path) -> None:
@@ -54,6 +68,20 @@ class TradeCsvLogger:
                     "realized_r": trade.realized_r,
                     "reason": trade.reason,
                     "notes": " | ".join(trade.notes),
+                    "tags": " | ".join(trade.tags),
+                    "market_state": trade.metadata.get("market_state"),
+                    "context_alignment": trade.metadata.get("context_alignment"),
+                    "session_name": trade.metadata.get("session_name"),
+                    "session_phase": trade.metadata.get("session_phase"),
+                    "setup_quality_label": trade.metadata.get("setup_quality_label"),
+                    "setup_quality_score": trade.metadata.get("setup_quality_score"),
+                    "day_feedback_reason": trade.metadata.get("day_feedback_reason"),
+                    "day_trade_count": trade.metadata.get("day_trade_count"),
+                    "bars_held": trade.metadata.get("bars_held"),
+                    "best_r_multiple": trade.metadata.get("best_r_multiple"),
+                    "worst_r_multiple": trade.metadata.get("worst_r_multiple"),
+                    "first_target_hit_after_bars": trade.metadata.get("first_target_hit_after_bars"),
+                    "follow_through_state": trade.metadata.get("follow_through_state"),
                 }
             )
 
@@ -78,4 +106,3 @@ class EquityCsvLogger:
         with self.path.open("a", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=self.FIELDNAMES)
             writer.writerow({"timestamp": timestamp, "equity": equity})
-

@@ -13,9 +13,20 @@ from backend.app.config.models import ConfigBundle
 class TimeframeBuilder:
     """Build and persist configured timeframes from a canonical `1m` DataFrame."""
 
-    def __init__(self, config: ConfigBundle) -> None:
+    def __init__(self, config: ConfigBundle, progress_callback=None) -> None:
         self.config = config
         self.resample_config = config.system.resample
+        self.progress_callback = progress_callback
+
+    def _emit(self, event_type: str, **payload: object) -> None:
+        if callable(self.progress_callback):
+            self.progress_callback(event_type, **payload)
+
+    def _log(self, message: str, *, level: str = "info") -> None:
+        if callable(self.progress_callback):
+            self._emit("event", level=level, message=message)
+            return
+        print(message)
 
     def _source_close_cutoff(self, df: pd.DataFrame) -> pd.Timestamp:
         base_rule = self._to_pandas_rule(self.config.system.market.base_timeframe)
@@ -34,15 +45,21 @@ class TimeframeBuilder:
         df_resampled = df_resampled.loc[df_resampled.index <= close_cutoff]
         removed = before - len(df_resampled)
         if removed:
-            print(
+            self._log(
                 f"Removed {removed} incomplete resampled candle(s); "
-                f"latest usable close: {close_cutoff}"
+                f"latest usable close: {close_cutoff}",
+                level="warning",
             )
         return df_resampled
 
     def resample(self, df: pd.DataFrame, rule: str) -> pd.DataFrame:
         start = time.time()
-        print(f"\nResampling -> {rule}")
+        self._emit(
+            "phase",
+            status="running",
+            phase="resampling timeframe",
+            detail=f"building {rule} from {self.config.system.market.base_timeframe}",
+        )
         pandas_rule = self._to_pandas_rule(rule)
         df_resampled = (
             df.resample(
@@ -60,7 +77,14 @@ class TimeframeBuilder:
             .dropna()
         )
         df_resampled = self._drop_incomplete_resampled_candles(df, df_resampled)
-        print(f"Done: {rule} | rows: {len(df_resampled)} | Time: {time.time() - start:.2f}s")
+        self._emit(
+            "metrics",
+            metrics={
+                "active_timeframe": rule,
+                f"{rule}_rows": len(df_resampled),
+                f"{rule}_build_sec": f"{time.time() - start:.2f}",
+            },
+        )
         return df_resampled
 
     def build_timeframes(self, df_1m: pd.DataFrame) -> dict[str, pd.DataFrame]:
@@ -70,7 +94,6 @@ class TimeframeBuilder:
             for timeframe in (
                 market.execution_timeframe,
                 *market.context_timeframes,
-                *market.supported_execution_timeframes,
             )
             if timeframe != market.base_timeframe
         }
@@ -94,19 +117,48 @@ class TimeframeBuilder:
         root = Path(base_path or self.config.system.storage.root)
 
         overall_start = time.time()
-        print(f"\nStarting resampling pipeline for {symbol}")
-        print(f"Range: {start_date} -> {end_date}")
+        self._emit(
+            "phase",
+            status="running",
+            phase="resampling market history",
+            detail=f"{symbol} | {start_date} -> {end_date}",
+        )
         frames = self.build_timeframes(df_1m)
-        for timeframe, frame in frames.items():
+        total_frames = len(frames)
+        for index, (timeframe, frame) in enumerate(frames.items(), start=1):
             folder = root / symbol / timeframe
             folder.mkdir(parents=True, exist_ok=True)
             path = folder / f"{symbol}_{timeframe}_{start_date}_to_{end_date}.csv"
             t0 = time.time()
             frame.to_csv(path)
-            print(f"Saved {timeframe} -> {path} | Time: {time.time() - t0:.2f}s")
-        print(f"\nResampling pipeline completed in {time.time() - overall_start:.2f}s")
-        for timeframe, frame in frames.items():
-            print(f"  {timeframe}: {len(frame)} rows")
+            self._emit(
+                "progress",
+                description=f"Saving resampled frames for {symbol}",
+                completed=index,
+                total=total_frames,
+                status="running",
+            )
+            self._emit(
+                "metrics",
+                metrics={
+                    "symbol": symbol,
+                    "range": f"{start_date} -> {end_date}",
+                    "saved_timeframe": timeframe,
+                    "saved_rows": len(frame),
+                    "save_time_sec": f"{time.time() - t0:.2f}",
+                },
+            )
+            self._log(f"Saved {timeframe} -> {path}", level="success")
+        self._emit(
+            "complete",
+            status="completed",
+            phase="resampling complete",
+            detail=f"{symbol} | {start_date} -> {end_date}",
+            metrics={
+                "elapsed_sec": f"{time.time() - overall_start:.2f}",
+                **{f"{timeframe}_rows": len(frame) for timeframe, frame in frames.items()},
+            },
+        )
         return frames
 
     def _sort_key(self, timeframe: str) -> int:

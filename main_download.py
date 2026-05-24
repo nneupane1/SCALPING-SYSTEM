@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 
+from backend.app.console import CommandDashboard
 from backend.app.data import MarketDataDownloader
 from backend.app.main import create_app
 
@@ -16,16 +17,38 @@ def main() -> None:
     parser.add_argument("--end-date", default=None, help="Optional end date override.")
     args = parser.parse_args()
     app = create_app()
-    downloader = MarketDataDownloader(app.config)
     interval = args.interval or app.config.system.market.base_timeframe
-    frame = downloader.fetch_full_history(
-        symbol=args.symbol,
-        interval=interval,
-        start_date=args.start_date,
-        end_date=args.end_date,
-    )
-    print(f"\nDownload complete | rows={len(frame)} | latest={frame.index.max()}")
-    print(f"Storage root: {app.config.system.storage.root}")
+    symbol = args.symbol or app.config.system.market.symbol
+    start_date = args.start_date or app.config.system.history.start_date
+    end_date = args.end_date or app.config.system.history.end_date
+    with CommandDashboard("Historical Download", subtitle="Binance OHLCV bootstrap") as dashboard:
+        dashboard.emit(
+            "context",
+            context={
+                "symbol": symbol,
+                "interval": interval,
+                "range": f"{start_date} -> {end_date}",
+                "storage_root": app.config.system.storage.root,
+            },
+        )
+        downloader = MarketDataDownloader(app.config, progress_callback=dashboard.emit)
+        frame = downloader.fetch_full_history(
+            symbol=symbol,
+            interval=interval,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        dashboard.emit(
+            "complete",
+            status="completed",
+            phase="download command finished",
+            detail=f"{symbol} {interval}",
+            metrics={
+                "rows": len(frame),
+                "latest": frame.index.max(),
+                "storage_root": app.config.system.storage.root,
+            },
+        )
 
 
 if __name__ == "__main__":

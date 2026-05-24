@@ -28,7 +28,7 @@ def dataframe_to_candles(df: pd.DataFrame, *, symbol: str, timeframe: str) -> tu
                 low=float(row["low"]),
                 close=float(row["close"]),
                 volume=float(row["volume"]),
-                trade_count=int(row.get("trade_count", 0)),
+                trade_count=_coerce_trade_count(row.get("trade_count", 0)),
                 closed=True,
             )
         )
@@ -40,3 +40,9 @@ def _to_datetime(value: object) -> datetime:
     if timestamp.tzinfo is not None:
         timestamp = timestamp.tz_convert("UTC").tz_localize(None)
     return timestamp.to_pydatetime()
+
+
+def _coerce_trade_count(value: object) -> int:
+    if value is None or pd.isna(value):
+        return 0
+    return int(value)

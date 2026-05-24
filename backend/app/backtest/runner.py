@@ -39,10 +39,22 @@ class BacktestRunner:
         *,
         downloader: MarketDataDownloader | None = None,
         timeframe_builder: TimeframeBuilder | None = None,
+        progress_callback=None,
     ) -> None:
         self.config = config
-        self.downloader = downloader or MarketDataDownloader(config)
-        self.timeframe_builder = timeframe_builder or TimeframeBuilder(config)
+        self.progress_callback = progress_callback
+        self.downloader = downloader or MarketDataDownloader(config, progress_callback=progress_callback)
+        self.timeframe_builder = timeframe_builder or TimeframeBuilder(config, progress_callback=progress_callback)
+
+    def _emit(self, event_type: str, **payload: object) -> None:
+        if callable(self.progress_callback):
+            self.progress_callback(event_type, **payload)
+
+    def _log(self, message: str, *, level: str = "info") -> None:
+        if callable(self.progress_callback):
+            self._emit("event", level=level, message=message)
+            return
+        print(message)
 
     def run(
         self,
@@ -55,6 +67,12 @@ class BacktestRunner:
         start_date = start_date or self.config.system.history.start_date
         end_date = end_date or self.config.system.history.end_date
         execution_timeframe = self.config.system.market.execution_timeframe
+        self._emit(
+            "phase",
+            status="running",
+            phase="preparing backtest",
+            detail=f"{symbol} | {start_date} -> {end_date}",
+        )
 
         df_1m = self.downloader.fetch_full_history(
             symbol=symbol,
@@ -99,10 +117,12 @@ class BacktestRunner:
 
         resume_index = int(checkpoint.get("next_index", 0)) if resume and checkpoint else 0
         if resume_index > 0:
-            print(f"Resuming backtest from checkpoint index {resume_index}")
+            self._log(f"Resuming backtest from checkpoint index {resume_index}", level="warning")
             self._fast_forward(simulator, resume_index)
 
         save_every = max(1, backtest_cfg.save_every_steps)
+        total_steps = len(candles_by_timeframe.get(execution_timeframe, ()))
+        update_stride = max(1, total_steps // 300) if total_steps else 1
         while replay_engine.has_next():
             closed_before = len(runtime.portfolio_manager.closed_trades)
             result = simulator.step()
@@ -116,6 +136,28 @@ class BacktestRunner:
                 timestamp=result.snapshot.generated_at.isoformat(),
                 equity=result.portfolio.current_equity,
             )
+            if (
+                replay_engine.cursor.index % update_stride == 0
+                or replay_engine.cursor.index == total_steps
+            ):
+                self._emit(
+                    "progress",
+                    description=f"Backtesting {symbol} {execution_timeframe}",
+                    completed=replay_engine.cursor.index,
+                    total=total_steps,
+                    status="running",
+                )
+                self._emit(
+                    "metrics",
+                    metrics={
+                        "symbol": symbol,
+                        "range": f"{start_date} -> {end_date}",
+                        "steps": replay_engine.cursor.index,
+                        "closed_trades": len(runtime.portfolio_manager.closed_trades),
+                        "equity": f"{runtime.portfolio_manager.current_equity:.2f}",
+                        "realized_pnl": f"{runtime.portfolio_manager.realized_pnl:.2f}",
+                    },
+                )
             if backtest_cfg.enabled and replay_engine.cursor.index % save_every == 0:
                 checkpoint_store.write(
                     {
@@ -131,6 +173,18 @@ class BacktestRunner:
                     }
                 )
 
+        self._emit(
+            "complete",
+            status="completed",
+            phase="backtest complete",
+            detail=str(output_dir),
+            metrics={
+                "steps": replay_engine.cursor.index,
+                "closed_trades": len(runtime.portfolio_manager.closed_trades),
+                "equity": f"{runtime.portfolio_manager.current_equity:.2f}",
+                "realized_pnl": f"{runtime.portfolio_manager.realized_pnl:.2f}",
+            },
+        )
         checkpoint_store.write(
             {
                 "symbol": symbol,

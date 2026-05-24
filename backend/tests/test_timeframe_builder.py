@@ -66,7 +66,9 @@ class TimeframeBuilderTests(unittest.TestCase):
         frames = TimeframeBuilder(config).build_timeframes(df)
 
         self.assertIn("5m", frames)
+        self.assertIn("15m", frames)
         self.assertEqual(1, len(frames["5m"]))
+        self.assertEqual(0, len(frames["15m"]))
         self.assertEqual(100, int(frames["5m"]["open"].iloc[0]))
 
 

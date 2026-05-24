@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 
+from backend.app.console import CommandDashboard
 from backend.app.main import create_app
 from backend.app.replay import ReplayRunner
 
@@ -17,18 +18,33 @@ def main() -> None:
     args = parser.parse_args()
 
     app = create_app()
-    summary = ReplayRunner(app.config).run(
-        symbol=args.symbol,
-        start_date=args.start_date,
-        end_date=args.end_date,
-        max_steps=args.steps,
-    )
-    print(f"Replay summary for {summary.symbol} on {summary.execution_timeframe}")
-    print(f"Steps processed this run: {summary.steps_processed}")
-    print(f"Current replay index: {summary.current_index}")
-    print(f"Closed trades: {summary.closed_trades}")
-    print(f"Equity: {summary.current_equity:.2f}")
-    print(f"Checkpoint: {summary.checkpoint_path}")
+    with CommandDashboard("Replay Runner", subtitle="Deterministic historical stepping") as dashboard:
+        dashboard.emit(
+            "context",
+            context={
+                "symbol": args.symbol or app.config.system.market.symbol,
+                "execution_timeframe": app.config.system.market.execution_timeframe,
+                "steps_requested": args.steps,
+            },
+        )
+        summary = ReplayRunner(app.config, progress_callback=dashboard.emit).run(
+            symbol=args.symbol,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            max_steps=args.steps,
+        )
+        dashboard.emit(
+            "complete",
+            status="completed",
+            phase="replay command finished",
+            detail=str(summary.checkpoint_path),
+            metrics={
+                "steps_processed": summary.steps_processed,
+                "current_index": summary.current_index,
+                "closed_trades": summary.closed_trades,
+                "equity": f"{summary.current_equity:.2f}",
+            },
+        )
 
 
 if __name__ == "__main__":

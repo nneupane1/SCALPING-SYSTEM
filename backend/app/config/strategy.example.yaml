@@ -20,6 +20,60 @@ strategy:
 filters:
   require_vwap_alignment: false
   require_ema_alignment: false
+  context:
+    enabled: true
+    timeframe: 15m
+    lookback_bars: 4
+    alignment_threshold: 0.62
+    clear_margin: 0.08
+    confidence_bonus: 0.08
+    confidence_penalty: 0.12
+    neutral_confidence_penalty: 0.03
+    aligned_risk_multiplier: 1.0
+    neutral_risk_multiplier: 0.9
+    conflicting_risk_multiplier: 0.75
+    block_on_conflict: false
+  market_state:
+    enabled: true
+    timeframe: 15m
+    context_lookback_bars: 4
+    execution_lookback_bars: 6
+    trend_efficiency_threshold: 0.34
+    chop_overlap_threshold: 0.58
+    compression_ratio_threshold: 0.78
+    alternation_threshold: 0.6
+    no_trade_states:
+      - volatile_chop
+    trend_confidence_bonus: 0.06
+    transition_confidence_adjustment: 0.0
+    range_confidence_penalty: 0.06
+    chop_confidence_penalty: 0.12
+    compression_confidence_penalty: 0.04
+    trend_risk_multiplier: 1.05
+    transition_risk_multiplier: 1.0
+    range_risk_multiplier: 0.88
+    chop_risk_multiplier: 0.7
+    compression_risk_multiplier: 0.92
+  quality:
+    enabled: true
+    minimum_score: 0.42
+    marginal_score: 0.55
+    strong_score: 0.72
+    min_risk_multiplier: 0.7
+    max_risk_multiplier: 1.2
+  session:
+    enabled: true
+    block_outside_sessions: true
+    opening_minutes: 60
+    closing_buffer_minutes: 30
+    opening_confidence_bonus: 0.04
+    core_confidence_adjustment: 0.0
+    closing_confidence_penalty: 0.05
+    outside_confidence_penalty: 0.18
+    opening_risk_multiplier: 1.05
+    core_risk_multiplier: 1.0
+    closing_risk_multiplier: 0.85
+    outside_risk_multiplier: 0.0
 
 profiles:
   5m:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 
 from backend.app.backtest import BacktestRunner
+from backend.app.console import CommandDashboard
 from backend.app.main import create_app
 
 
@@ -16,20 +17,36 @@ def main() -> None:
     args = parser.parse_args()
 
     app = create_app()
-    runner = BacktestRunner(app.config)
-    summary = runner.run(
-        symbol=args.symbol,
-        start_date=args.start_date,
-        end_date=args.end_date,
-    )
-
-    print(f"Backtest completed for {summary.symbol} on {summary.execution_timeframe}")
-    print(f"Range: {summary.start_date} -> {summary.end_date}")
-    print(f"Steps processed: {summary.steps_processed}")
-    print(f"Closed trades: {summary.closed_trades}")
-    print(f"Current equity: {summary.current_equity:.2f}")
-    print(f"Realized PnL: {summary.realized_pnl:.2f}")
-    print(f"Outputs: {summary.output_dir}")
+    with CommandDashboard("Backtest Runner", subtitle="Checkpointed historical simulation") as dashboard:
+        dashboard.emit(
+            "context",
+            context={
+                "symbol": args.symbol or app.config.system.market.symbol,
+                "execution_timeframe": app.config.system.market.execution_timeframe,
+                "range": (
+                    f"{args.start_date or app.config.system.history.start_date} -> "
+                    f"{args.end_date or app.config.system.history.end_date}"
+                ),
+            },
+        )
+        runner = BacktestRunner(app.config, progress_callback=dashboard.emit)
+        summary = runner.run(
+            symbol=args.symbol,
+            start_date=args.start_date,
+            end_date=args.end_date,
+        )
+        dashboard.emit(
+            "complete",
+            status="completed",
+            phase="backtest command finished",
+            detail=str(summary.output_dir),
+            metrics={
+                "steps": summary.steps_processed,
+                "closed_trades": summary.closed_trades,
+                "equity": f"{summary.current_equity:.2f}",
+                "realized_pnl": f"{summary.realized_pnl:.2f}",
+            },
+        )
 
 
 if __name__ == "__main__":

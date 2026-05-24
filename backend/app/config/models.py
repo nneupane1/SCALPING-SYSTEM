@@ -162,7 +162,13 @@ class BinanceConfig:
     """Network and request policy for Binance REST market-data access."""
 
     base_url: str = "https://api.binance.com"
+    websocket_stream_url: str = "wss://stream.binance.com:9443/stream?streams="
+    websocket_api_url: str = "wss://ws-api.binance.com:443/ws-api/v3"
     klines_path: str = "/api/v3/klines"
+    exchange_info_path: str = "/api/v3/exchangeInfo"
+    order_path: str = "/api/v3/order"
+    open_orders_path: str = "/api/v3/openOrders"
+    account_path: str = "/api/v3/account"
     default_interval: str = "1m"
     historical_limit: int = 1000
     recent_limit: int = 500
@@ -175,6 +181,14 @@ class BinanceConfig:
     ca_bundle_path: str | None = None
     throttle_seconds: float = 0.2
     closed_klines_only: bool = True
+    order_submit_retry_attempts: int = 3
+    order_submit_retry_delay_seconds: float = 1.0
+    order_fill_timeout_seconds: float = 4.0
+    user_stream_recv_window: float = 5000.0
+    user_stream_reconnect_seconds: float = 5.0
+    market_stream_reconnect_seconds: float = 5.0
+    stream_inactivity_timeout_seconds: float = 90.0
+    exchange_info_cache_seconds: float = 300.0
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "BinanceConfig":
@@ -182,7 +196,17 @@ class BinanceConfig:
         ca_bundle = payload.get("ca_bundle_path")
         return cls(
             base_url=str(payload.get("base_url", "https://api.binance.com")),
+            websocket_stream_url=str(
+                payload.get("websocket_stream_url", "wss://stream.binance.com:9443/stream?streams=")
+            ),
+            websocket_api_url=str(
+                payload.get("websocket_api_url", "wss://ws-api.binance.com:443/ws-api/v3")
+            ),
             klines_path=str(payload.get("klines_path", "/api/v3/klines")),
+            exchange_info_path=str(payload.get("exchange_info_path", "/api/v3/exchangeInfo")),
+            order_path=str(payload.get("order_path", "/api/v3/order")),
+            open_orders_path=str(payload.get("open_orders_path", "/api/v3/openOrders")),
+            account_path=str(payload.get("account_path", "/api/v3/account")),
             default_interval=str(payload.get("default_interval", "1m")),
             historical_limit=int(payload.get("historical_limit", 1000)),
             recent_limit=int(payload.get("recent_limit", 500)),
@@ -195,6 +219,14 @@ class BinanceConfig:
             ca_bundle_path=None if ca_bundle in (None, "") else str(ca_bundle),
             throttle_seconds=float(payload.get("throttle_seconds", 0.2)),
             closed_klines_only=_as_bool(payload.get("closed_klines_only", True)),
+            order_submit_retry_attempts=int(payload.get("order_submit_retry_attempts", 3)),
+            order_submit_retry_delay_seconds=float(payload.get("order_submit_retry_delay_seconds", 1.0)),
+            order_fill_timeout_seconds=float(payload.get("order_fill_timeout_seconds", 4.0)),
+            user_stream_recv_window=float(payload.get("user_stream_recv_window", 5000.0)),
+            user_stream_reconnect_seconds=float(payload.get("user_stream_reconnect_seconds", 5.0)),
+            market_stream_reconnect_seconds=float(payload.get("market_stream_reconnect_seconds", 5.0)),
+            stream_inactivity_timeout_seconds=float(payload.get("stream_inactivity_timeout_seconds", 90.0)),
+            exchange_info_cache_seconds=float(payload.get("exchange_info_cache_seconds", 300.0)),
         )
 
 
@@ -277,6 +309,35 @@ class RuntimeCheckpointConfig:
 
 
 @dataclass(frozen=True)
+class ForwardRuntimeConfig:
+    """Settings for forward paper/live polling loops."""
+
+    enabled: bool = True
+    checkpoint_dir: str = "_checkpoints"
+    checkpoint_suffix: str = ".checkpoint.json"
+    output_dir: str = "output"
+    poll_seconds: float = 15.0
+    recent_limit: int = 500
+    warmup_base_candles: int = 1000
+    save_every_polls: int = 1
+    resume_enabled: bool = True
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> "ForwardRuntimeConfig":
+        return cls(
+            enabled=_as_bool(payload.get("enabled", True)),
+            checkpoint_dir=str(payload.get("checkpoint_dir", "_checkpoints")),
+            checkpoint_suffix=str(payload.get("checkpoint_suffix", ".checkpoint.json")),
+            output_dir=str(payload.get("output_dir", "output")),
+            poll_seconds=float(payload.get("poll_seconds", 15.0)),
+            recent_limit=int(payload.get("recent_limit", 500)),
+            warmup_base_candles=int(payload.get("warmup_base_candles", 1000)),
+            save_every_polls=int(payload.get("save_every_polls", 1)),
+            resume_enabled=_as_bool(payload.get("resume_enabled", True)),
+        )
+
+
+@dataclass(frozen=True)
 class TransportConfig:
     """Network-facing runtime settings."""
 
@@ -304,6 +365,8 @@ class SystemConfig:
     resample: ResampleConfig
     backtest: RuntimeCheckpointConfig
     replay: RuntimeCheckpointConfig
+    paper: ForwardRuntimeConfig
+    live: ForwardRuntimeConfig
     transport: TransportConfig
 
     @classmethod
@@ -320,6 +383,8 @@ class SystemConfig:
             resample=ResampleConfig.from_mapping(payload.get("resample", {})),
             backtest=RuntimeCheckpointConfig.from_mapping(payload.get("backtest", {})),
             replay=RuntimeCheckpointConfig.from_mapping(payload.get("replay", {})),
+            paper=ForwardRuntimeConfig.from_mapping(payload.get("paper", {})),
+            live=ForwardRuntimeConfig.from_mapping(payload.get("live", {})),
             transport=TransportConfig.from_mapping(_require(payload, "transport")),
         )
 
@@ -370,21 +435,180 @@ class StrategyTriggerConfig:
 
 @dataclass(frozen=True)
 class StrategyFilterConfig:
-    """Optional indicator gates.
+    """Optional context and indicator gates.
 
-    These remain disabled in the current code path because the first pass does
-    not yet build EMA or VWAP features. They are carried in config so the system
-    shape stays consistent as those features are added later.
+    The current first-pass implementation uses the context layer to interpret
+    `5m` execution signals through a slower timeframe without turning that
+    slower view into a hard block by default. Indicator gates remain available
+    for later EMA/VWAP feature work.
     """
+
+    @dataclass(frozen=True)
+    class ContextConfig:
+        """Soft higher-timeframe context settings."""
+
+        enabled: bool = False
+        timeframe: str = "15m"
+        lookback_bars: int = 4
+        alignment_threshold: float = 0.62
+        clear_margin: float = 0.08
+        confidence_bonus: float = 0.08
+        confidence_penalty: float = 0.12
+        neutral_confidence_penalty: float = 0.03
+        aligned_risk_multiplier: float = 1.0
+        neutral_risk_multiplier: float = 0.9
+        conflicting_risk_multiplier: float = 0.75
+        block_on_conflict: bool = False
+
+        @classmethod
+        def from_mapping(
+            cls,
+            payload: Mapping[str, Any],
+        ) -> "StrategyFilterConfig.ContextConfig":
+            return cls(
+                enabled=_as_bool(payload.get("enabled", False)),
+                timeframe=str(payload.get("timeframe", "15m")),
+                lookback_bars=int(payload.get("lookback_bars", 4)),
+                alignment_threshold=float(payload.get("alignment_threshold", 0.62)),
+                clear_margin=float(payload.get("clear_margin", 0.08)),
+                confidence_bonus=float(payload.get("confidence_bonus", 0.08)),
+                confidence_penalty=float(payload.get("confidence_penalty", 0.12)),
+                neutral_confidence_penalty=float(payload.get("neutral_confidence_penalty", 0.03)),
+                aligned_risk_multiplier=float(payload.get("aligned_risk_multiplier", 1.0)),
+                neutral_risk_multiplier=float(payload.get("neutral_risk_multiplier", 0.9)),
+                conflicting_risk_multiplier=float(payload.get("conflicting_risk_multiplier", 0.75)),
+                block_on_conflict=_as_bool(payload.get("block_on_conflict", False)),
+            )
+
+    @dataclass(frozen=True)
+    class MarketStateConfig:
+        """Broader environment classification for execution signals."""
+
+        enabled: bool = True
+        timeframe: str = "15m"
+        context_lookback_bars: int = 4
+        execution_lookback_bars: int = 6
+        trend_efficiency_threshold: float = 0.34
+        chop_overlap_threshold: float = 0.58
+        compression_ratio_threshold: float = 0.78
+        alternation_threshold: float = 0.6
+        no_trade_states: tuple[str, ...] = ("volatile_chop",)
+        trend_confidence_bonus: float = 0.06
+        transition_confidence_adjustment: float = 0.0
+        range_confidence_penalty: float = 0.06
+        chop_confidence_penalty: float = 0.12
+        compression_confidence_penalty: float = 0.04
+        trend_risk_multiplier: float = 1.05
+        transition_risk_multiplier: float = 1.0
+        range_risk_multiplier: float = 0.88
+        chop_risk_multiplier: float = 0.7
+        compression_risk_multiplier: float = 0.92
+
+        @classmethod
+        def from_mapping(
+            cls,
+            payload: Mapping[str, Any],
+        ) -> "StrategyFilterConfig.MarketStateConfig":
+            return cls(
+                enabled=_as_bool(payload.get("enabled", True)),
+                timeframe=str(payload.get("timeframe", "15m")),
+                context_lookback_bars=int(payload.get("context_lookback_bars", 4)),
+                execution_lookback_bars=int(payload.get("execution_lookback_bars", 6)),
+                trend_efficiency_threshold=float(payload.get("trend_efficiency_threshold", 0.34)),
+                chop_overlap_threshold=float(payload.get("chop_overlap_threshold", 0.58)),
+                compression_ratio_threshold=float(payload.get("compression_ratio_threshold", 0.78)),
+                alternation_threshold=float(payload.get("alternation_threshold", 0.6)),
+                no_trade_states=tuple(str(item) for item in payload.get("no_trade_states", ("volatile_chop",))),
+                trend_confidence_bonus=float(payload.get("trend_confidence_bonus", 0.06)),
+                transition_confidence_adjustment=float(payload.get("transition_confidence_adjustment", 0.0)),
+                range_confidence_penalty=float(payload.get("range_confidence_penalty", 0.06)),
+                chop_confidence_penalty=float(payload.get("chop_confidence_penalty", 0.12)),
+                compression_confidence_penalty=float(payload.get("compression_confidence_penalty", 0.04)),
+                trend_risk_multiplier=float(payload.get("trend_risk_multiplier", 1.05)),
+                transition_risk_multiplier=float(payload.get("transition_risk_multiplier", 1.0)),
+                range_risk_multiplier=float(payload.get("range_risk_multiplier", 0.88)),
+                chop_risk_multiplier=float(payload.get("chop_risk_multiplier", 0.7)),
+                compression_risk_multiplier=float(payload.get("compression_risk_multiplier", 0.92)),
+            )
+
+    @dataclass(frozen=True)
+    class QualityConfig:
+        """Setup grading rules used to scale risk without changing the setup pattern."""
+
+        enabled: bool = True
+        minimum_score: float = 0.42
+        marginal_score: float = 0.55
+        strong_score: float = 0.72
+        min_risk_multiplier: float = 0.7
+        max_risk_multiplier: float = 1.2
+
+        @classmethod
+        def from_mapping(
+            cls,
+            payload: Mapping[str, Any],
+        ) -> "StrategyFilterConfig.QualityConfig":
+            return cls(
+                enabled=_as_bool(payload.get("enabled", True)),
+                minimum_score=float(payload.get("minimum_score", 0.42)),
+                marginal_score=float(payload.get("marginal_score", 0.55)),
+                strong_score=float(payload.get("strong_score", 0.72)),
+                min_risk_multiplier=float(payload.get("min_risk_multiplier", 0.7)),
+                max_risk_multiplier=float(payload.get("max_risk_multiplier", 1.2)),
+            )
+
+    @dataclass(frozen=True)
+    class SessionTuningConfig:
+        """Time-of-day shaping for active session windows."""
+
+        enabled: bool = True
+        block_outside_sessions: bool = True
+        opening_minutes: int = 60
+        closing_buffer_minutes: int = 30
+        opening_confidence_bonus: float = 0.04
+        core_confidence_adjustment: float = 0.0
+        closing_confidence_penalty: float = 0.05
+        outside_confidence_penalty: float = 0.18
+        opening_risk_multiplier: float = 1.05
+        core_risk_multiplier: float = 1.0
+        closing_risk_multiplier: float = 0.85
+        outside_risk_multiplier: float = 0.0
+
+        @classmethod
+        def from_mapping(
+            cls,
+            payload: Mapping[str, Any],
+        ) -> "StrategyFilterConfig.SessionTuningConfig":
+            return cls(
+                enabled=_as_bool(payload.get("enabled", True)),
+                block_outside_sessions=_as_bool(payload.get("block_outside_sessions", True)),
+                opening_minutes=int(payload.get("opening_minutes", 60)),
+                closing_buffer_minutes=int(payload.get("closing_buffer_minutes", 30)),
+                opening_confidence_bonus=float(payload.get("opening_confidence_bonus", 0.04)),
+                core_confidence_adjustment=float(payload.get("core_confidence_adjustment", 0.0)),
+                closing_confidence_penalty=float(payload.get("closing_confidence_penalty", 0.05)),
+                outside_confidence_penalty=float(payload.get("outside_confidence_penalty", 0.18)),
+                opening_risk_multiplier=float(payload.get("opening_risk_multiplier", 1.05)),
+                core_risk_multiplier=float(payload.get("core_risk_multiplier", 1.0)),
+                closing_risk_multiplier=float(payload.get("closing_risk_multiplier", 0.85)),
+                outside_risk_multiplier=float(payload.get("outside_risk_multiplier", 0.0)),
+            )
 
     require_vwap_alignment: bool = False
     require_ema_alignment: bool = False
+    context: ContextConfig = field(default_factory=ContextConfig)
+    market_state: MarketStateConfig = field(default_factory=MarketStateConfig)
+    quality: QualityConfig = field(default_factory=QualityConfig)
+    session: SessionTuningConfig = field(default_factory=SessionTuningConfig)
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "StrategyFilterConfig":
         return cls(
             require_vwap_alignment=_as_bool(payload.get("require_vwap_alignment", False)),
             require_ema_alignment=_as_bool(payload.get("require_ema_alignment", False)),
+            context=cls.ContextConfig.from_mapping(payload.get("context", {})),
+            market_state=cls.MarketStateConfig.from_mapping(payload.get("market_state", {})),
+            quality=cls.QualityConfig.from_mapping(payload.get("quality", {})),
+            session=cls.SessionTuningConfig.from_mapping(payload.get("session", {})),
         )
 
 
@@ -527,8 +751,14 @@ class RiskLimitsConfig:
     max_open_positions: int = 1
     max_daily_loss_r: float = 3.0
     max_consecutive_losses: int = 4
+    max_trades_per_day: int = 15
     min_stop_distance_ratio: float = 0.0005
     max_position_notional: float | None = None
+    minimum_closed_trades_for_day_scaling: int = 2
+    good_day_threshold_r: float = 1.0
+    good_day_risk_multiplier: float = 1.05
+    bad_day_threshold_r: float = -1.0
+    bad_day_risk_multiplier: float = 0.8
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "RiskLimitsConfig":
@@ -538,8 +768,14 @@ class RiskLimitsConfig:
             max_open_positions=int(payload.get("max_open_positions", 1)),
             max_daily_loss_r=float(payload.get("max_daily_loss_r", 3.0)),
             max_consecutive_losses=int(payload.get("max_consecutive_losses", 4)),
+            max_trades_per_day=int(payload.get("max_trades_per_day", 15)),
             min_stop_distance_ratio=float(payload.get("min_stop_distance_ratio", 0.0005)),
             max_position_notional=None if max_notional is None else float(max_notional),
+            minimum_closed_trades_for_day_scaling=int(payload.get("minimum_closed_trades_for_day_scaling", 2)),
+            good_day_threshold_r=float(payload.get("good_day_threshold_r", 1.0)),
+            good_day_risk_multiplier=float(payload.get("good_day_risk_multiplier", 1.05)),
+            bad_day_threshold_r=float(payload.get("bad_day_threshold_r", -1.0)),
+            bad_day_risk_multiplier=float(payload.get("bad_day_risk_multiplier", 0.8)),
         )
 
 
@@ -552,6 +788,11 @@ class ManagementConfig:
     move_stop_to_breakeven_after_first_partial: bool = True
     trailing_mode: str = "previous_candle_structure"
     trailing_lookback_bars: int = 1
+    early_exit_after_bars: int = 3
+    early_exit_min_progress_r: float = 0.2
+    early_exit_max_adverse_close_r: float = -0.35
+    impulsive_move_threshold_r: float = 1.2
+    impulsive_trailing_lookback_bars: int = 2
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "ManagementConfig":
@@ -563,6 +804,11 @@ class ManagementConfig:
             ),
             trailing_mode=str(payload.get("trailing_mode", "previous_candle_structure")),
             trailing_lookback_bars=int(payload.get("trailing_lookback_bars", 1)),
+            early_exit_after_bars=int(payload.get("early_exit_after_bars", 3)),
+            early_exit_min_progress_r=float(payload.get("early_exit_min_progress_r", 0.2)),
+            early_exit_max_adverse_close_r=float(payload.get("early_exit_max_adverse_close_r", -0.35)),
+            impulsive_move_threshold_r=float(payload.get("impulsive_move_threshold_r", 1.2)),
+            impulsive_trailing_lookback_bars=int(payload.get("impulsive_trailing_lookback_bars", 2)),
         )
 
 

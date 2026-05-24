@@ -37,10 +37,22 @@ class ReplayRunner:
         *,
         downloader: MarketDataDownloader | None = None,
         timeframe_builder: TimeframeBuilder | None = None,
+        progress_callback=None,
     ) -> None:
         self.config = config
-        self.downloader = downloader or MarketDataDownloader(config)
-        self.timeframe_builder = timeframe_builder or TimeframeBuilder(config)
+        self.progress_callback = progress_callback
+        self.downloader = downloader or MarketDataDownloader(config, progress_callback=progress_callback)
+        self.timeframe_builder = timeframe_builder or TimeframeBuilder(config, progress_callback=progress_callback)
+
+    def _emit(self, event_type: str, **payload: object) -> None:
+        if callable(self.progress_callback):
+            self.progress_callback(event_type, **payload)
+
+    def _log(self, message: str, *, level: str = "info") -> None:
+        if callable(self.progress_callback):
+            self._emit("event", level=level, message=message)
+            return
+        print(message)
 
     def run(
         self,
@@ -54,6 +66,12 @@ class ReplayRunner:
         start_date = start_date or self.config.system.history.start_date
         end_date = end_date or self.config.system.history.end_date
         execution_timeframe = self.config.system.market.execution_timeframe
+        self._emit(
+            "phase",
+            status="running",
+            phase="preparing replay run",
+            detail=f"{symbol} | {start_date} -> {end_date}",
+        )
 
         history_path = (
             self.config.system.storage.root
@@ -98,7 +116,7 @@ class ReplayRunner:
         if checkpoint and not checkpoint.get("completed", False):
             resume_index = int(checkpoint.get("next_index", 0))
         if resume_index > 0:
-            print(f"Resuming replay from checkpoint index {resume_index}")
+            self._log(f"Resuming replay from checkpoint index {resume_index}", level="warning")
             for _ in range(resume_index):
                 result = simulator.step()
                 if result is None:
@@ -106,6 +124,8 @@ class ReplayRunner:
 
         steps_this_run = 0
         save_every = max(1, replay_cfg.save_every_steps)
+        total_steps = len(candles_by_timeframe.get(execution_timeframe, ()))
+        update_stride = max(1, total_steps // 250) if total_steps else 1
         while replay_engine.has_next():
             if max_steps is not None and steps_this_run >= max_steps:
                 break
@@ -113,6 +133,28 @@ class ReplayRunner:
             if result is None:
                 break
             steps_this_run += 1
+            if (
+                replay_engine.cursor.index % update_stride == 0
+                or replay_engine.cursor.index == total_steps
+            ):
+                self._emit(
+                    "progress",
+                    description=f"Replay stepping {symbol} {execution_timeframe}",
+                    completed=replay_engine.cursor.index,
+                    total=total_steps,
+                    status="running",
+                )
+                self._emit(
+                    "metrics",
+                    metrics={
+                        "symbol": symbol,
+                        "range": f"{start_date} -> {end_date}",
+                        "steps_this_run": steps_this_run,
+                        "current_index": replay_engine.cursor.index,
+                        "closed_trades": len(runtime.portfolio_manager.closed_trades),
+                        "equity": f"{runtime.portfolio_manager.current_equity:.2f}",
+                    },
+                )
             if replay_cfg.enabled and replay_engine.cursor.index % save_every == 0:
                 checkpoint_store.write(
                     {
@@ -129,6 +171,18 @@ class ReplayRunner:
                 )
 
         completed = not replay_engine.has_next()
+        self._emit(
+            "complete",
+            status="completed" if completed else "running",
+            phase="replay run complete",
+            detail=str(checkpoint_path),
+            metrics={
+                "steps_this_run": steps_this_run,
+                "current_index": replay_engine.cursor.index,
+                "closed_trades": len(runtime.portfolio_manager.closed_trades),
+                "equity": f"{runtime.portfolio_manager.current_equity:.2f}",
+            },
+        )
         checkpoint_store.write(
             {
                 "symbol": symbol,

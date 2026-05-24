@@ -24,11 +24,12 @@ def make_candle(
 ) -> Candle:
     base = base_time or utc_timestamp(10, 0)
     open_time = base + timedelta(minutes=minute_offset)
+    close_delta = _timeframe_delta(timeframe)
     return Candle(
         symbol="BTCUSDT",
         timeframe=timeframe,
         open_time=open_time,
-        close_time=open_time + timedelta(minutes=15 if timeframe == "15m" else 1),
+        close_time=open_time + close_delta,
         open=open_price,
         high=high,
         low=low,
@@ -38,3 +39,12 @@ def make_candle(
         closed=True,
     )
 
+
+def _timeframe_delta(timeframe: str) -> timedelta:
+    magnitude = int(timeframe[:-1])
+    unit = timeframe[-1].lower()
+    if unit == "m":
+        return timedelta(minutes=magnitude)
+    if unit == "h":
+        return timedelta(hours=magnitude)
+    raise ValueError(f"Unsupported timeframe in test helper: {timeframe}")

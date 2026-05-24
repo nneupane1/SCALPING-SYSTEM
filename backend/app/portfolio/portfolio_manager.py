@@ -2,9 +2,25 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from backend.app.core.models import ClosedTrade, OpenPosition, PortfolioSnapshot
 
 from .journal import Journal
+
+
+@dataclass(frozen=True)
+class DayPerformanceSummary:
+    """Intraday performance snapshot used for discipline and risk shaping."""
+
+    trade_count: int
+    realized_pnl: float
+    realized_r: float
+    win_count: int
+    loss_count: int
+    consecutive_losses: int
 
 
 class PortfolioManager:
@@ -33,6 +49,9 @@ class PortfolioManager:
             entry_price=position.entry_price,
             stop_price=position.stop_price,
             quantity=position.initial_quantity,
+            session=position.source_signal.metadata.get("session_name"),
+            market_state=position.source_signal.metadata.get("market_state"),
+            quality=position.source_signal.metadata.get("setup_quality_label"),
         )
 
     def sync_active_position(self, position: OpenPosition) -> None:
@@ -59,6 +78,10 @@ class PortfolioManager:
             pnl=trade.realized_pnl,
             r=trade.realized_r,
             reason=trade.reason,
+            tags=trade.tags,
+            market_state=trade.metadata.get("market_state"),
+            session=trade.metadata.get("session_name"),
+            quality=trade.metadata.get("setup_quality_label"),
         )
 
     def snapshot(self) -> PortfolioSnapshot:
@@ -73,4 +96,26 @@ class PortfolioManager:
             peak_equity=self.peak_equity,
             drawdown=drawdown,
             active_position=self.active_position,
+        )
+
+    def build_day_summary(self, reference_time: datetime, timezone_name: str) -> DayPerformanceSummary:
+        local_day = reference_time.astimezone(ZoneInfo(timezone_name)).date()
+        day_trades = [
+            trade
+            for trade in self.closed_trades
+            if trade.closed_at.astimezone(ZoneInfo(timezone_name)).date() == local_day
+        ]
+        consecutive_losses = 0
+        for trade in reversed(day_trades):
+            if trade.realized_pnl < 0:
+                consecutive_losses += 1
+                continue
+            break
+        return DayPerformanceSummary(
+            trade_count=len(day_trades),
+            realized_pnl=sum(trade.realized_pnl for trade in day_trades),
+            realized_r=sum(trade.realized_r for trade in day_trades),
+            win_count=sum(1 for trade in day_trades if trade.realized_pnl > 0),
+            loss_count=sum(1 for trade in day_trades if trade.realized_pnl < 0),
+            consecutive_losses=consecutive_losses,
         )

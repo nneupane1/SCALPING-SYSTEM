@@ -49,8 +49,8 @@ class BinanceRestClient:
         )
 
     def _verify_setting(self) -> bool | str:
-        env_ca_bundle = os.getenv("BINANCE_CA_BUNDLE_PATH")
-        env_ssl_verify = os.getenv("BINANCE_SSL_VERIFY")
+        env_ca_bundle = (os.getenv("BINANCE_CA_BUNDLE_PATH") or "").strip()
+        env_ssl_verify = (os.getenv("BINANCE_SSL_VERIFY") or "").strip()
 
         if env_ca_bundle:
             bundle_path = Path(env_ca_bundle)
@@ -60,8 +60,8 @@ class BinanceRestClient:
                 raise FileNotFoundError(f"Configured CA bundle not found: {bundle_path}")
             return str(bundle_path)
 
-        if env_ssl_verify is not None:
-            lowered = env_ssl_verify.strip().lower()
+        if env_ssl_verify:
+            lowered = env_ssl_verify.lower()
             if lowered in {"false", "0", "no", "off"}:
                 return False
             if lowered in {"true", "1", "yes", "on"}:

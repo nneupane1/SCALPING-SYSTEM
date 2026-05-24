@@ -1,7 +1,7 @@
 """Market data ingestion, candle building, resampling, and cache state."""
 
 from .binance_rest import BinanceRestClient
-from .binance_ws import BinanceStreamRequest, BinanceWebSocketClient
+from .binance_ws import BinanceMarketStreamClient, BinanceStreamRequest, BinanceWebSocketClient, ClosedKlineEvent
 from .cache import CandleCache
 from .candle_builder import CandleBuilder
 from .downloader import MarketDataDownloader
@@ -12,12 +12,14 @@ from .timeframe_builder import TimeframeBuilder
 
 __all__ = [
     "BinanceRestClient",
+    "BinanceMarketStreamClient",
     "BinanceStreamRequest",
     "BinanceWebSocketClient",
     "Candle",
     "CandleBuilder",
     "CandleCache",
     "CandleUpdate",
+    "ClosedKlineEvent",
     "MarketDataDownloader",
     "Tick",
     "TimeframeResampler",

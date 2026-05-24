@@ -35,9 +35,11 @@ mode.
 - [Execution and Risk Layer](#execution-and-risk-layer)
 - [Portfolio and Journaling Layer](#portfolio-and-journaling-layer)
 - [Backtest Mode](#backtest-mode)
+- [Post-Backtest Validation](#post-backtest-validation)
 - [Replay Layer](#replay-layer)
 - [Checkpointing Model](#checkpointing-model)
 - [API and Frontend Layer](#api-and-frontend-layer)
+- [Message Bus Guidance](#message-bus-guidance)
 - [Testing and Verification](#testing-and-verification)
 - [Outputs and Artifacts](#outputs-and-artifacts)
 - [Design Invariants](#design-invariants)
@@ -115,6 +117,7 @@ earned, not because the trade has spent several candles above that level.
 | --- | --- |
 | `backend/app/config/` | System, strategy, and risk configuration |
 | `backend/app/core/` | Orchestration, event dispatch, shared runtime behavior |
+| `backend/app/console/` | Rich-powered operator dashboards for CLI commands |
 | `backend/app/data/` | Binance connectivity, candle building, resampling, and cache state |
 | `backend/app/scanner/` | Real-time market-state filtering and setup preconditions |
 | `backend/app/strategies/` | Strategy interfaces and pullback scalp logic |
@@ -122,6 +125,7 @@ earned, not because the trade has spent several candles above that level.
 | `backend/app/risk/` | Position sizing, stop logic, trailing rules, and kill switches |
 | `backend/app/portfolio/` | Trade ledger, analytics, equity state, and journaling |
 | `backend/app/replay/` | Historical event playback and deterministic simulation |
+| `backend/app/live/` | Forward paper/live runners over fresh closed Binance data |
 | `backend/app/api/` | HTTP and WebSocket surfaces for the frontend |
 | `backend/app/backtest/` | Checkpointed historical runner and CSV output loggers |
 | `backend/tests/` | Backend tests for timing, state, and strategy behavior |
@@ -131,8 +135,8 @@ earned, not because the trade has spent several candles above that level.
 | `infra/` | Deployment assets such as containers, compose files, and environment templates |
 | `main_download.py` | CLI entry point for checkpointed Binance history downloads |
 | `main_resample.py` | CLI entry point for rebuilding higher timeframes from canonical `1m` data |
-| `main_paper.py` | CLI entry point for paper-trading runtime assembly |
-| `main_live.py` | CLI entry point for live-trading readiness checks |
+| `main_paper.py` | CLI entry point for checkpointed forward paper-trading loops |
+| `main_live.py` | CLI entry point for checkpointed forward live-scanning loops |
 | `main_replay.py` | CLI entry point for checkpointed replay execution |
 | `main_backtest.py` | CLI entry point for checkpointed historical backtests |
 
@@ -157,9 +161,13 @@ flowchart TD
 ```
 
 The key design choice is that `1m` data remains the canonical source of truth.
-Any `5m`, `15m`, or higher timeframe view should be rebuilt internally so that
+Any derived execution or context view should be rebuilt internally so that
 scanner logic, strategy logic, replay logic, and frontend visualization all
-reference the same timing model.
+reference the same timing model. In the current default runtime, that means the
+system rebuilds `5m` from `1m` because `5m` is the active scalp clock. Slower
+views such as `15m` are still supported as alternate strategy expressions, but
+they are not supposed to be materialized by default unless the active config
+actually needs them.
 
 ## Operational Workflow
 
@@ -184,6 +192,30 @@ market can arrive through WebSocket ticks, through REST-downloaded one-minute
 history, or through a replay cursor over previously saved data, but once the
 system has a closed execution candle and its supporting context candles, the
 scanner and strategy are supposed to see the same structural picture.
+
+That same philosophy now extends to the console surface. Long-running commands
+no longer rely on uncontrolled print streams alone. The repository now includes
+Rich-powered in-place dashboards that present phase, progress, elapsed time,
+remaining time, operational metrics, and recent events in one stable operator
+view. The point is not cosmetics for their own sake. A trading research and
+execution stack becomes materially easier to trust when the console exposes what
+the process is doing, where it is in the workflow, what it has already
+processed, and whether it is waiting, resuming, or completing without flooding
+the terminal with flickering output.
+
+There is now also a concrete forward-execution path rather than only a
+historical one. In paper and live modes, the runner bootstraps a warm `1m`
+state from local history when available, fetches recent closed `1m` candles
+once to synchronize startup state, and then diverges into two different forward
+transport models. The paper runner can still advance from periodic REST refresh
+cycles, which is useful when the operator wants a bounded dry-run over fresh
+data without committing to a persistent market socket. The live runner now
+advances from a real Binance public WebSocket subscription on closed `1m`
+kline events, continuously rebuilding the active `5m` execution frame plus the
+`15m` context frame and feeding only newly closed `5m` candles into the same
+trading engine used elsewhere in the repository. That means the live path is no
+longer a special-case scanner loop. It is a checkpointed state machine driven
+by exchange stream events.
 
 ## Historical Research Workflow
 
@@ -217,17 +249,36 @@ The core design invariant is that scanner, strategy, and risk logic should not
 fork by mode. Mode should change data and execution adapters, not the decision
 engine itself.
 
+That invariant now holds across three concrete runner families:
+
+- replay uses deterministic historical snapshots
+- backtest wraps replay in CSV logging and historical checkpointing
+- paper forward runners can poll fresh `1m` data, rebuild the active frames, and checkpoint operational state between cycles
+- live forward runners advance from closed `1m` WebSocket candles and optionally pair that market stream with a private account stream for exchange reconciliation
+
 ## Timeframe Hierarchy
 
-The system is intentionally multi-timeframe even though `1m` remains canonical.
+The current default runtime is intentionally narrow, but it is no longer
+single-timeframe in spirit. Right now the live scalp path is built around
+canonical `1m` market data, derived `5m` execution candles, and a soft `15m`
+context layer. That combination matches the current trading philosophy more
+closely than either a pure `5m` view or a fully gated higher-timeframe model.
+The `5m` chart is fast enough to generate repeated intraday opportunities,
+while the `15m` chart is slow enough to reveal whether those opportunities are
+appearing inside clean continuation structure or inside noise.
 
-| Timeframe | Role | Intended use |
+| Timeframe | Default role | Intended use |
 | --- | --- | --- |
 | `1m` | canonical market stream | source of truth for all resampling |
-| `5m` | default execution timeframe | higher-frequency scalp execution aligned to repetition |
-| `15m` | secondary execution/context timeframe | slower, cleaner continuation structure |
-| `1h` | directional context | session bias and higher-level alignment |
+| `5m` | active execution timeframe | default scalp execution aligned to repetition |
+| `15m` | active soft context layer | slower structural lens for interpreting `5m` setups |
+| `1h` | optional future context layer | directional bias only if higher-timeframe gating is re-enabled |
 
+That distinction matters because support is not the same thing as obligation.
+The repository may know how to express the strategy on `15m` as a primary
+execution clock, but in the default runtime `15m` exists first as context for
+`5m`, not as a second execution engine competing for control. Likewise, `1h`
+belongs to a future context-filter path, not to the current live scanner.
 Additional timeframes may be added later, but they should still be rebuilt from
 the same `1m` source rather than introduced as external, pre-aggregated truth.
 
@@ -252,6 +303,16 @@ example runtime uses the `5m` profile because it aligns more closely with the
 stated research objective of repeated intraday participation, while `15m`
 remains available as a slower, cleaner alternative.
 
+The current runtime also uses `15m` in a second, more practical way: as a soft
+context layer for `5m` signals. That means the slower timeframe is allowed to
+influence confidence and position aggressiveness without blocking every
+misaligned trade. A `5m` setup that appears inside supportive `15m` structure
+keeps full risk, a setup appearing inside mixed context is sized down modestly,
+and a setup appearing against a clearly opposing `15m` structure is sized down
+more aggressively. The important point is that trade frequency should compress
+only modestly under this model because context is guiding, not suffocating, the
+execution layer.
+
 ## Configuration Model
 
 The scaffold includes example YAML files under `backend/app/config/`.
@@ -259,13 +320,14 @@ The scaffold includes example YAML files under `backend/app/config/`.
 | File | Purpose |
 | --- | --- |
 | `system.example.yaml` | runtime mode, symbols, session windows, storage, and transport settings |
-| `system.example.yaml -> account` | initial equity and reporting currency |
-| `system.example.yaml -> binance` | REST endpoint, retry, timeout, TLS, and throttling behavior |
+| `system.example.yaml -> account` | initial equity and reporting currency; the current default base capital is `25,000 EUR` |
+| `system.example.yaml -> binance` | REST endpoints, WebSocket endpoints, retry, timeout, TLS, throttling, stream reconnect, and order reconciliation behavior |
 | `system.example.yaml -> history` | default historical research date range |
 | `system.example.yaml -> downloads` | partial-file and checkpoint policy for history downloads |
 | `system.example.yaml -> resample` | pandas resample semantics and incomplete-candle handling |
 | `system.example.yaml -> backtest / replay` | periodic checkpoint cadence and output locations |
 | `strategy.example.yaml` | scanner thresholds, setup definitions, and entry triggers |
+| `strategy.example.yaml -> filters.context` | soft `15m` context interpretation, confidence adjustments, and risk scaling |
 | `strategy.example.yaml -> profiles` | timeframe-specific scanner, trigger, and cadence expectations |
 | `risk.example.yaml` | risk per trade, partial rules, trailing rules, and daily guardrails |
 
@@ -290,8 +352,13 @@ Target responsibilities:
 - cache recent history for warmup and recovery
 - support replay from persisted history
 
-This layer should eventually support both market-data streams and account/order
-streams, because live execution cannot be managed correctly from price data
+That is no longer only a future requirement. The repository now contains both a
+public Binance market-stream client for closed `1m` kline events and a private
+user-data stream client for order and balance reconciliation. The important
+architectural point is that market data and account state are treated as
+distinct transports. Price alone cannot tell the system whether an order was
+rejected, partially filled, canceled, or completed at a materially different
+price than expected, so live execution cannot be treated as a candle problem
 alone.
 
 In practical terms, the data layer now has three distinct responsibilities. The
@@ -336,6 +403,16 @@ builder drops incomplete higher-timeframe bars by default so scanner and
 strategy code never see a candle whose close boundary has not actually been
 earned by the available source data.
 
+### Binance WebSocket Market Stream
+
+[`backend/app/data/binance_ws.py`](backend/app/data/binance_ws.py) now contains
+the public market-stream path used by the live runner. The active implementation
+subscribes to Binance closed `1m` kline events, normalizes them into an
+internal `ClosedKlineEvent`, pushes them through a queueing surface, and lets
+the live runner merge each new closed candle into its canonical local `1m`
+state before resampling. This keeps the live clock aligned with exchange event
+boundaries instead of simulating a stream through repeated REST polling.
+
 ## Scanner Layer
 
 The scanner is not the strategy. Its job is to reduce noise.
@@ -345,11 +422,29 @@ Target responsibilities:
 - detect meaningful movement intensity
 - detect controlled pullbacks or compressive pauses
 - reject equilibrium-like conditions
-- produce a context summary that downstream modules can interpret
+- produce a tradable narrative that downstream modules can interpret
 
 In practical terms, the scanner should answer:
 
 > Is the market coherent enough to justify attention right now?
+
+In the current code path, the scanner still operates on the execution
+timeframe, which means the active `5m` scanner is responsible for identifying
+the local momentum -> pullback sequence. The slower `15m` view is not folded
+into scanner state directly. That separation is deliberate. The scanner tells
+the system whether a local setup exists at all. The context layer then tells
+the strategy whether that local setup is appearing inside supportive structure,
+mixed structure, or obvious opposition.
+
+That division now matters even more because the repository is no longer using a
+binary “setup exists or does not exist” mindset alone. The scanner still owns
+the narrow local question of whether the latest `5m` candles describe momentum
+followed by a controlled pullback, but the rest of the decision stack can now
+interpret that local structure through broader state rather than blindly
+treating every valid pullback as equivalent. In other words, the scanner is the
+first gate, not the only gate. It says that price has produced a narrative that
+is worth consideration; later modules decide how much trust and capital that
+narrative deserves.
 
 ## Strategy Layer
 
@@ -358,11 +453,51 @@ The first strategy family is a pullback scalp around resumed imbalance.
 Target responsibilities:
 
 - read scanner output and recent candle structure
-- decide whether trend, pullback, and trigger conditions align
+- decide whether trend, pullback, trigger, and slower context align well enough
 - emit a directional signal with entry, invalidation, and metadata
 
 The strategy should remain narrow. It should not manage orders, size positions,
 or mutate portfolio state.
+
+The current implementation now interprets `15m` context as a soft filter. It
+scores the most recent closed `15m` candles for directional structure, compares
+that support with the side of the candidate `5m` trade, and then adjusts the
+emitted signal in two ways: first through confidence, and second through a
+`risk_fraction_multiplier` carried in signal metadata. That multiplier is then
+applied by the risk manager so conflicting context reduces exposure without
+eliminating the setup entirely. This keeps the system closer to how an
+experienced discretionary scalper actually thinks: align when possible, size
+down when the broader picture is messy, and reserve hard blocks for later
+research if the data proves they are worth the missed opportunities.
+
+That strategy layer now goes further than simple higher-timeframe alignment. It
+also classifies the broader `15m` environment into coarse states such as
+`trend`, `transition`, `range`, `volatile_chop`, and `compression`, then uses
+that label as a structural interpretation layer rather than as a second trigger
+engine. This is an important design choice. The `15m` chart does not place
+trades. It tells the `5m` execution logic whether the local setup is appearing
+inside clean continuation structure, noisy overlap, or transitional drift.
+Signals produced during obvious chop can now be rejected outright through
+configured no-trade states, while signals produced inside aligned trend
+structure receive more favorable confidence and risk treatment.
+
+The strategy also now assigns a setup-quality score to each candidate trade.
+That score combines scanner momentum quality, pullback orderliness, trigger
+candle quality, slower context alignment, broader market state, and session
+timing into one bounded value that lives in signal metadata. The point is not
+to create a magical number. The point is to stop pretending that all technically
+valid setups deserve identical size. In practical terms, this means the system
+can keep the same core pattern definition while still treating an elite aligned
+continuation differently from a marginal setup that barely qualifies.
+
+Session timing is also interpreted explicitly. The strategy now maps each
+closed execution candle into configured trading windows such as London or New
+York, then distinguishes opening-drive behavior, core-session behavior, and
+late-session slowdown. That allows the repository to express a rule many
+discretionary scalpers use implicitly: the same technical setup behaves
+differently depending on when it appears, and the system should know whether it
+is participating during active intraday flow or trying to force a scalp outside
+its intended rhythm.
 
 ## Execution and Risk Layer
 
@@ -384,6 +519,57 @@ Target risk responsibilities:
 - trail the runner with simple structural logic
 - enforce daily loss and session kill switches
 
+The current implementation now encodes more of the trade lifecycle that used to
+exist only as design philosophy. Position sizing is still based on fixed
+fractional risk, but that base fraction is no longer applied blindly. The final
+risk fraction can now be shaped by slower-timeframe context, market-state
+classification, session timing, setup-quality scoring, and intraday performance
+feedback. That keeps the core risk model simple while allowing the system to
+lean into cleaner conditions and de-risk messy ones without inventing a
+different strategy.
+
+The execution layer itself is now materially closer to an exchange-grade path
+than the original scaffold. Live mode can instantiate an authenticated Binance
+spot broker, sign REST order requests with API-key headers plus HMAC request
+security, recover uncertain submissions by querying the exchange with the local
+client order id before retrying, and reconcile subsequent order-state changes
+through the private user-data stream. That means acknowledgements and fills no
+longer depend solely on the initial HTTP response. The order manager now keeps
+local broker-order state and lets private execution reports tighten that state
+as the exchange publishes new facts about the order lifecycle.
+
+Trade management is also broker-aware in live mode. Entry orders still express
+the same strategy-defined setup, but when live routing is enabled the execution
+engine can now submit real reduce-only market orders for partial exits and full
+exits, while also maintaining a live Binance `STOP_LOSS` protective order for
+the remaining long spot size. When the local stop moves because the strategy
+takes the first partial, shifts to breakeven, or trails structure higher, the
+engine replaces the resting exchange stop so the protective boundary on the
+broker side remains synchronized with the current internal stop. This is not a
+cosmetic improvement. It is what separates a live market route from a dry
+simulation that simply assumes the application will always stay online and act
+first.
+
+Post-entry management is also more expressive than the first-pass fixed rules.
+The engine still takes the first partial at `+1R`, still moves the stop to
+breakeven, and still trails the runner structurally, but it now also tracks
+whether the trade proves itself quickly. Trades that fail to show enough
+progress within a configured number of bars can be closed early rather than
+waiting passively for a full stop. This is deliberate loss compression: the
+system is allowed to admit that a trade is not behaving as expected before the
+market fully invalidates the original structure. Conversely, trades that reach
+their first target with clearly impulsive follow-through can earn a slightly
+looser runner trail so the system does not cut expansion short just because it
+is using a mechanical process.
+
+Daily consistency controls now exist at the engine level rather than only as
+aspirational operator discipline. The runtime can refuse new entries after a
+configured number of trades, after a configured daily `R` drawdown, or after a
+configured number of consecutive losing trades. It can also scale risk modestly
+up or down based on how the current local day is unfolding. That does not turn
+the system into an emotional discretionary trader. It turns repeated
+observations about session quality into explicit rules.
+
 ## Portfolio and Journaling Layer
 
 The portfolio layer is the system memory.
@@ -399,6 +585,24 @@ The journal should eventually preserve not only what the trade earned, but why
 the system entered, how it managed risk, and what the market looked like at the
 time.
 
+The current repository now captures more of that forensic context directly in
+trade outputs. Closed-trade records can carry tags and metadata such as market
+state, context alignment, session phase, setup-quality label, intraday feedback
+reason, bars held, best and worst `R` excursion, and whether the runner emerged
+from impulsive or merely acceptable follow-through. That matters because a
+scalping system improves less by staring at aggregate PnL than by learning
+which trade archetypes actually contribute edge and which ones merely consume
+attention and risk budget.
+
+The analytics module now also understands those fields structurally. Instead of
+only reporting one aggregate win rate, it can build grouped breakdowns by
+market state, session phase, quality tier, exit reason, and explicit trade
+tags. That is the beginning of a real feedback loop rather than a passive log
+file. It gives the system a way to answer questions such as whether
+`volatile_chop` trades are being blocked effectively, whether `opening` session
+setups still outperform `closing` session setups, and whether so-called
+`clean_continuation` trades actually deserve larger future allocation.
+
 ## Backtest Mode
 
 The repository now includes a checkpointed backtest runner under
@@ -410,6 +614,64 @@ existing trading engine make every scanner, entry, and management decision. The
 runner writes `trades.csv` and `equity.csv` outputs, and it periodically stores
 the next replay index in a checkpoint file so a long historical pass can resume
 without discarding previous progress.
+
+## Post-Backtest Validation
+
+Backtest completion is not the point at which the system is ready for paper or
+live capital. A profitable equity curve is only a compressed summary of what
+the rules did in one historical sample. The correct next step is to expand that
+summary into a deeper understanding of the system's behavior before any forward
+execution decision is made.
+
+The first task after a backtest is to verify the baseline assumptions rather
+than admire the curve. The repository already enforces closed-candle logic and
+canonical `1m -> 5m/15m` resampling, but post-run review should still treat
+data integrity and execution realism as first-class checks. A valid workflow
+asks whether candles were missing, whether any lookahead slipped in, whether the
+execution clock truly acted only after closed confirmation, and whether fees and
+slippage assumptions are at least conservative enough that the backtest is not
+quietly inflated.
+
+The second task is to leave money-space and move into risk-space. Everything
+that matters for this system becomes clearer when trades are normalized into
+`R`: average win in `R`, average loss in `R`, first-target capture rate,
+runner-contribution rate, and distribution across `-1R`, partial winners, and
+expanded outcomes such as `+2R` or `+3R`. This is the lens that makes the
+strategy portable across capital sizes and is also the only lens that maps
+cleanly onto the actual risk engine used by the codebase.
+
+The third task is to study sequence behavior instead of only totals. A system
+with good expectancy can still be hard to execute if its losing streaks cluster
+or if recovery periods are long and psychologically heavy. That means the
+operator should examine losing streak depth, winning streak concentration, flat
+periods, drawdown duration, and the shape of recovery. These are not secondary
+statistics. They are the bridge between mathematical edge and executable edge.
+
+The fourth task is to localize where the edge actually lives. This repository
+is already moving in that direction through market-state labels, session-phase
+labels, setup-quality scores, and forensic trade tags. After a backtest, those
+fields should be used to segment behavior by London versus New York timing, by
+trend versus range versus chop, by clean continuation versus fake breakout, and
+by strong versus marginal setup quality. The question is no longer merely
+whether the system worked. The question becomes where it was structurally
+strong, where it was structurally weak, and which conditions deserve more trust
+when the system moves forward into paper.
+
+The fifth task is to identify failure zones without rushing to optimize them
+away. Low-volatility drift, overlapping candles, choppy `15m` structure,
+late-session continuation failure, and weak follow-through after entry are all
+examples of information that matter more than an aggregate PnL number. At this
+stage the goal is not endless parameter editing. The goal is to understand the
+system deeply enough to build realistic expectations, freeze the rules, and
+convert them into a clear playbook.
+
+That sequence leads to the only correct transition: backtest first, then
+behavioral analysis, then a frozen ruleset, then paper trading as an execution
+validation phase rather than a strategy-discovery phase. Paper trading should
+be used to answer whether real-time behavior matches the tested framework,
+whether the operator follows the same rules under uncertainty, and whether the
+runtime environment behaves identically enough that the edge is still being
+expressed as expected.
 
 ## Replay Layer
 
@@ -470,6 +732,41 @@ The API layer should expose both request/response endpoints and a real-time
 WebSocket stream for candles, signals, trades, portfolio state, and health
 events.
 
+## Message Bus Guidance
+
+For the current architecture, RabbitMQ or Kafka is not the next priority. The
+platform is still a single-process trading engine with one primary exchange,
+one active symbol path, one operator console, and one frontend surface. In that
+shape, WebSocket market transport from Binance, signed REST for order
+submission, the private user-data stream for reconciliation, and the existing
+in-process event bus are enough. Adding a brokered message bus now would create
+operational complexity faster than it would create trading edge.
+
+That conclusion is also consistent with how those technologies are positioned by
+their own documentation. Kafka describes itself as an event-streaming platform,
+which is the right fit when multiple durable consumers need to process large
+shared streams over time. RabbitMQ centers on queues, delivery semantics, and
+work distribution between producers and consumers. Both are useful technologies,
+but neither solves the immediate problem this repository still has, which is
+deterministic exchange execution, durable trading state, and exact symbol-rule
+compliance.
+
+For this system, the current order of operations should be simpler. Keep the
+market edge path lean: Binance WebSocket in, internal resampling and decision
+logic, broker-aware execution, database persistence, frontend broadcast out.
+Only introduce RabbitMQ when the system is decomposed into multiple services
+that truly need work-queue semantics or retryable asynchronous jobs, such as
+separate journal enrichment workers or alerting pipelines. Only introduce Kafka
+when the architecture reaches a scale where a durable event log with multiple
+independent consumers becomes a real requirement, for example multiple strategy
+engines, offline feature consumers, or separate analytics services replaying
+the same raw market stream.
+
+In short, for the current single-engine BTC scalping platform, WebSocket plus
+REST plus durable local persistence is the correct architecture. RabbitMQ or
+Kafka would be an infrastructure decision for a later scaling phase, not a
+requirement for reaching reliable paper or early live trading.
+
 ## Testing and Verification
 
 The repository includes focused backend unit tests for the core deterministic
@@ -479,14 +776,19 @@ Covered behaviors:
 
 - `CandleBuilder` closes candles correctly and fills minute gaps deterministically
 - `JsonCheckpointStore` round-trips atomic JSON checkpoint files
+- configuration loading honors env-driven mode and system-path overrides
 - `MarketDataDownloader.klines_to_df()` filters still-forming candles correctly
 - `TimeframeResampler` rebuilds higher-timeframe candles from canonical `1m` data
 - `TimeframeBuilder` resamples using the configured research semantics and drops incomplete higher-timeframe bars
+- Binance public-stream decoding converts closed `1m` websocket payloads into deterministic internal events
+- Binance private execution-report normalization preserves status, side, and cumulative fill math
+- Binance spot broker parameter mapping preserves entry-side and reduce-only exit-side semantics
 - `MomentumScanner` recognizes a valid impulse-plus-pullback narrative
 - `PullbackScalpStrategy` emits a trade signal only when the trigger candle confirms
 - timeframe-profile resolution selects the correct execution expression
 - `RiskManager` sizes a trade from fixed account risk
 - `TrailingEngine` takes the first partial and moves the stop to breakeven
+- `ForwardRunner` bootstraps warm state, merges fresh `1m` candles, and writes operational checkpoints
 
 The current tests are intentionally focused on deterministic mechanics rather
 than exchange I/O. Network-heavy flows such as the public Binance downloader are
@@ -509,6 +811,12 @@ Research artifacts:
 - `backtest/output/equity.csv`
 - `backtest/output/_checkpoints/*.checkpoint.json`
 - `replay/output/_checkpoints/*.checkpoint.json`
+- `paper/output/trades.csv`
+- `paper/output/equity.csv`
+- `paper/output/_checkpoints/*.checkpoint.json`
+- `live/output/trades.csv`
+- `live/output/equity.csv`
+- `live/output/_checkpoints/*.checkpoint.json`
 
 These files are part of the intended working model rather than incidental logs.
 They allow the repository to behave like a restartable research environment
@@ -519,6 +827,10 @@ Test command:
 ```bash
 python -m unittest discover -s backend/tests -v
 ```
+
+The command-line runners also now use Rich dashboards, so local environments
+should install the `rich` dependency from `requirements.txt` before using the
+CLI surfaces.
 
 ## Design Invariants
 
@@ -539,18 +851,34 @@ This repository is now a working foundation, not a finished trading engine.
 
 Current boundaries:
 
-- live Binance order submission is still intentionally unimplemented
-- live account-stream reconciliation and exchange position syncing are not implemented yet
-- database-backed persistence and restart recovery are not implemented yet
+- live mode now supports authenticated Binance spot order routing, websocket-driven market ingestion, and private user-data reconciliation, but the supported production path is currently long-only spot execution; opening short positions still belongs to paper/research paths
+- the live broker does not yet implement exchange filter discovery and precision normalization from symbol metadata, so live quantities and stop prices still assume the configured risk output already fits Binance symbol rules
+- database-backed persistence is not implemented yet
 - the frontend is a typed mock console, not a live Next.js-integrated application yet
 - FastAPI transport wiring is not implemented yet; API routes and WebSocket broadcasting are placeholders
 - there is no database, no fee model, and no slippage model yet
 - daily target objectives such as `10-15` trades or `EUR 300-EUR 500` profit are not encoded as assumptions and must be validated empirically
 - there is no production secrets handling, deployment hardening, or exchange failover path yet
 
-That boundary is intentional. The current implementation is meant to lock down
-the rule path and package boundaries before exchange integration and persistence
-complexity are added.
+There is also an important conceptual boundary worth stating explicitly. The
+system now interprets market state more intelligently than the initial scaffold
+did, but it is still a candle-structure engine rather than a true order-flow
+engine. It does not model depth-of-book liquidity, queue position, tape
+aggression, or participant-level behavior directly. Its notion of “flow” is a
+disciplined closed-candle approximation expressed through expansion, overlap,
+compression, continuation quality, and response speed after entry. That is a
+deliberate and pragmatic first implementation, not a claim that the repository
+already captures every microstructural dimension of the market.
+
+The forward runners now do persist cursor and portfolio state to JSON
+checkpoints, including the open paper position if one exists, but that should
+still be understood as application-level recovery rather than production-grade
+durable state management.
+
+That boundary is intentional. The repository is no longer missing exchange
+integration entirely, but it is still in the stage where rule-path clarity and
+operational safety are being hardened before persistence, deployment, and
+cross-process recovery complexity are added.
 
 ## Extension Guide
 
@@ -578,14 +906,31 @@ described above.
 pip install -r requirements.txt
 ```
 
-### 2. Create a local environment file
+### 2. Create local environment files
 
 ```text
 copy .env.template .env
+copy secret.env.template secret.env
 ```
 
+The runtime now loads environment files in a deliberate order: `.env` first,
+then `secret.env`. That split is intentional. `.env` should hold shared local
+runtime settings such as mode selection, config path overrides, and TLS
+behavior, while `secret.env` should hold live exchange credentials and any
+other values that must never be committed. Because `secret.env` is loaded
+second, it overrides overlapping keys from `.env` automatically, which keeps
+operator intent clear and prevents credentials from leaking into the more
+general runtime file.
+
+If you are building toward live scanning and automated execution, that
+separation matters operationally. It lets you keep non-sensitive workstation
+defaults stable across sessions while rotating secrets independently, and it
+reduces the chance that a hurried edit to the main env file accidentally lands
+credentials in version control. If a key has ever been exposed in chat, email,
+or screenshots, rotate it before placing the replacement into `secret.env`.
+
 If you are behind a corporate TLS proxy or custom certificate chain, the
-runtime supports two environment overrides:
+runtime supports these environment overrides:
 
 ```text
 BINANCE_SSL_VERIFY=false
@@ -620,15 +965,23 @@ The repository already exposes the intended runtime surface:
 ```bash
 python main_download.py
 python main_resample.py
-python main_paper.py
-python main_live.py
+python main_paper.py --polls 1
+python main_live.py --polls 1
 python main_replay.py
 python main_backtest.py
 ```
 
-The download, resample, replay, and backtest commands now perform real work.
-The paper and live commands still act primarily as runtime-assembly and safety
-checks because authenticated broker execution is not implemented yet.
+The download, resample, replay, and backtest commands perform real work. The
+paper and live commands now also run real forward loops over fresh closed `1m`
+market data, rebuild the active frames, execute the trading engine on newly
+closed `5m` candles, write equity and trade CSVs, and save operational
+checkpoints. `main_live.py` now advances from a Binance public WebSocket market
+stream instead of repeated REST polling, and when `risk.example.yaml ->
+execution.allow_live_orders` is enabled it can route authenticated spot orders,
+listen to the private Binance user-data stream, and keep order state
+reconciled. The default example configuration still leaves live order routing
+disabled so the safety gate remains on until the operator explicitly chooses
+otherwise.
 
 ### 6. Inspect the frontend shell
 
@@ -640,7 +993,7 @@ contracts and visual structure before live API integration.
 
 The next engineering steps should be:
 
-1. authenticated Binance market and account streams
+1. exchange filter and precision handling from Binance symbol metadata
 2. persistent storage for candles, fills, positions, and journal events
 3. FastAPI route wiring and real WebSocket transport
 4. live frontend data binding

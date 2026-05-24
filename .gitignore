@@ -1,4 +1,7 @@
 .env
+secret.env
+.env.local
+secret.env.local
 .venv/
 __pycache__/
 *.pyc
@@ -16,3 +19,5 @@ logs/
 data_storage/
 backtest/output/
 replay/output/
+paper/output/
+live/output/

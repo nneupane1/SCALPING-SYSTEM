@@ -3,8 +3,14 @@ risk:
   max_open_positions: 1
   max_daily_loss_r: 3.0
   max_consecutive_losses: 4
+  max_trades_per_day: 15
   min_stop_distance_ratio: 0.0005
   max_position_notional: 50000
+  minimum_closed_trades_for_day_scaling: 2
+  good_day_threshold_r: 1.0
+  good_day_risk_multiplier: 1.05
+  bad_day_threshold_r: -1.0
+  bad_day_risk_multiplier: 0.8
 
 management:
   first_partial_at_r: 1.0
@@ -12,6 +18,11 @@ management:
   move_stop_to_breakeven_after_first_partial: true
   trailing_mode: previous_candle_structure
   trailing_lookback_bars: 1
+  early_exit_after_bars: 3
+  early_exit_min_progress_r: 0.2
+  early_exit_max_adverse_close_r: -0.35
+  impulsive_move_threshold_r: 1.2
+  impulsive_trailing_lookback_bars: 2
 
 execution:
   allow_live_orders: false

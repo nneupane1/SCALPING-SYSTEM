@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -33,12 +34,18 @@ def load_config_bundle(
 ) -> ConfigBundle:
     """Load the three config files that define the runtime."""
 
-    system_payload = _load_yaml(Path(system_path))
+    env_system_path = os.getenv("TRADING_SYSTEM_CONFIG")
+    resolved_system_path = Path(env_system_path) if env_system_path else Path(system_path)
+    system_payload = dict(_load_yaml(resolved_system_path))
     strategy_payload = _load_yaml(Path(strategy_path))
     risk_payload = _load_yaml(Path(risk_path))
+    env_mode = os.getenv("TRADING_SYSTEM_MODE")
+    if env_mode:
+        app_payload = dict(system_payload.get("app", {}))
+        app_payload["mode"] = env_mode
+        system_payload["app"] = app_payload
     return ConfigBundle(
         system=SystemConfig.from_mapping(system_payload),
         strategy=StrategyConfig.from_mapping(strategy_payload),
         risk=RiskConfig.from_mapping(risk_payload),
     )
-
