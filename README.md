@@ -446,6 +446,17 @@ first gate, not the only gate. It says that price has produced a narrative that
 is worth consideration; later modules decide how much trust and capital that
 narrative deserves.
 
+The scanner is also no longer limited to a binary impulse test. It now grades
+the impulse leg itself by range expansion, directional close quality, body
+efficiency, and relative participation, then classifies that leg into
+qualitative tiers such as `average`, `strong`, or `explosive`. The same idea is
+applied to the pullback leg. A retracement is not accepted merely because it is
+shallower than some maximum depth. It is judged for overlap, compression,
+counter-pressure character, and relative candle size so the system can
+distinguish a genuinely clean pause from an aggressive reversal trying to
+disguise itself as a pullback. This moves the scanner from simple pattern
+recognition toward structural interpretation.
+
 ## Strategy Layer
 
 The first strategy family is a pullback scalp around resumed imbalance.
@@ -489,6 +500,16 @@ to create a magical number. The point is to stop pretending that all technically
 valid setups deserve identical size. In practical terms, this means the system
 can keep the same core pattern definition while still treating an elite aligned
 continuation differently from a marginal setup that barely qualifies.
+
+Entry timing is also handled more selectively than before. The trigger candle
+still has to breach the pullback structure and confirm with directional close,
+but the strategy now also rejects breakout entries that already look late or
+exhausted. A trigger can fail for being too extended beyond the pullback
+structure, for exploding too far relative to recent execution-candle bodies, or
+for emerging from a loose pre-breakout structure that no longer reflects clean
+compression. This keeps the repository aligned with the practical rule that the
+same pattern becomes a worse trade when it is entered too late inside the
+expansion phase.
 
 Session timing is also interpreted explicitly. The strategy now maps each
 closed execution candle into configured trading windows such as London or New
@@ -852,7 +873,7 @@ This repository is now a working foundation, not a finished trading engine.
 Current boundaries:
 
 - live mode now supports authenticated Binance spot order routing, websocket-driven market ingestion, and private user-data reconciliation, but the supported production path is currently long-only spot execution; opening short positions still belongs to paper/research paths
-- the live broker does not yet implement exchange filter discovery and precision normalization from symbol metadata, so live quantities and stop prices still assume the configured risk output already fits Binance symbol rules
+- live mode now performs exchange metadata checks before submission, including symbol status, supported order types, precision rounding, and notional validation, but it should still be treated as an early production path rather than a battle-hardened execution stack
 - database-backed persistence is not implemented yet
 - the frontend is a typed mock console, not a live Next.js-integrated application yet
 - FastAPI transport wiring is not implemented yet; API routes and WebSocket broadcasting are placeholders
@@ -864,7 +885,7 @@ There is also an important conceptual boundary worth stating explicitly. The
 system now interprets market state more intelligently than the initial scaffold
 did, but it is still a candle-structure engine rather than a true order-flow
 engine. It does not model depth-of-book liquidity, queue position, tape
-aggression, or participant-level behavior directly. Its notion of “flow” is a
+aggression, or participant-level behavior directly. Its notion of "flow" is a
 disciplined closed-candle approximation expressed through expansion, overlap,
 compression, continuation quality, and response speed after entry. That is a
 deliberate and pragmatic first implementation, not a claim that the repository

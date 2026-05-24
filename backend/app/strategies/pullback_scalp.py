@@ -58,6 +58,13 @@ class PullbackScalpStrategy(BaseStrategy):
         reference_mean_body = fmean(candle.body_size for candle in reference) if reference else 0.0
         trigger_body_ratio = safe_ratio(current.body_size, reference_mean_body, default=0.0)
         trigger_close_position = close_position_for_side(current, side)
+        impulse_range = (
+            scanner_decision.impulse_candle.range_size
+            if scanner_decision.impulse_candle is not None
+            else max(current.range_size, 1e-12)
+        )
+        pullback_tightness_ratio = float(scanner_decision.metrics.get("pullback_tightness_ratio", 1.0))
+        pre_breakout_tightness_score = max(0.0, min(1.0, 1.0 - pullback_tightness_ratio))
 
         if side is Side.LONG:
             breakout_happened = current.high > float(scanner_decision.trigger_level)
@@ -73,6 +80,12 @@ class PullbackScalpStrategy(BaseStrategy):
             stop_buffer = current.range_size * self.trigger_config.stop_buffer_ratio
             stop_price = float(scanner_decision.invalidation_level) + stop_buffer
             entry_price = current.close
+
+        breakout_extension_ratio = safe_ratio(
+            abs(entry_price - float(scanner_decision.trigger_level)),
+            impulse_range,
+            default=0.0,
+        )
 
         reasons: list[str] = []
         if not breakout_happened:
@@ -92,20 +105,69 @@ class PullbackScalpStrategy(BaseStrategy):
             return None
         reasons.append("trigger candle body expansion confirms resumed imbalance")
 
+        if trigger_body_ratio > self.trigger_config.max_body_ratio:
+            return None
+        reasons.append("trigger candle is not so extended that it looks exhausted")
+
         if trigger_close_position < self.trigger_config.min_close_position:
             return None
         reasons.append("trigger candle close is near the directional extreme")
+
+        if breakout_extension_ratio > self.trigger_config.max_breakout_extension_ratio:
+            return None
+        reasons.append("entry is still close enough to structure to avoid late chase risk")
+
+        if pre_breakout_tightness_score < self.trigger_config.min_pre_breakout_tightness_score:
+            return None
+        reasons.append("breakout emerges from sufficiently tight pre-trigger structure")
 
         risk_per_unit = abs(entry_price - stop_price)
         if risk_per_unit <= 0:
             return None
         first_target_price = entry_price + (risk_per_unit * side.multiplier)
+        breakout_freshness_score = max(
+            0.0,
+            min(
+                1.0,
+                1.0
+                - safe_ratio(
+                    max(0.0, trigger_body_ratio - self.trigger_config.min_body_ratio),
+                    max(1e-12, self.trigger_config.max_body_ratio - self.trigger_config.min_body_ratio),
+                    default=0.0,
+                ),
+            ),
+        )
+        extension_score = max(
+            0.0,
+            min(
+                1.0,
+                1.0
+                - safe_ratio(
+                    breakout_extension_ratio,
+                    self.trigger_config.max_breakout_extension_ratio,
+                    default=0.0,
+                ),
+            ),
+        )
+        entry_timing_score = max(
+            0.0,
+            min(
+                1.0,
+                (
+                    breakout_freshness_score
+                    + extension_score
+                    + pre_breakout_tightness_score
+                    + trigger_close_position
+                )
+                / 4.0,
+            ),
+        )
         confidence = min(
             1.0,
             (
-                min(2.0, scanner_decision.momentum_score) / 2
+                scanner_decision.momentum_score
                 + scanner_decision.pullback_score
-                + min(2.0, trigger_body_ratio) / 2
+                + entry_timing_score
                 + trigger_close_position
             )
             / 4,
@@ -134,6 +196,7 @@ class PullbackScalpStrategy(BaseStrategy):
             scanner_decision=scanner_decision,
             trigger_body_ratio=trigger_body_ratio,
             trigger_close_position=trigger_close_position,
+            entry_timing_score=entry_timing_score,
             context=context,
             market_state=market_state,
             session=session,
@@ -202,10 +265,19 @@ class PullbackScalpStrategy(BaseStrategy):
                 "setup_quality_score": quality.score,
                 "setup_quality_label": quality.label,
                 "risk_fraction_multiplier": combined_risk_multiplier,
+                "entry_timing_score": entry_timing_score,
                 "trigger_body_ratio": trigger_body_ratio,
+                "trigger_max_body_ratio": self.trigger_config.max_body_ratio,
                 "trigger_close_position": trigger_close_position,
+                "breakout_extension_ratio": breakout_extension_ratio,
+                "pre_breakout_tightness_score": pre_breakout_tightness_score,
                 "scanner_momentum_score": scanner_decision.momentum_score,
                 "scanner_pullback_score": scanner_decision.pullback_score,
+                "scanner_impulse_tier": scanner_decision.metrics.get("impulse_tier"),
+                "scanner_impulse_quality_score": scanner_decision.metrics.get("impulse_quality_score"),
+                "scanner_pullback_quality_label": scanner_decision.metrics.get("pullback_quality_label"),
+                "scanner_pullback_overlap_ratio": scanner_decision.metrics.get("pullback_overlap_ratio"),
+                "scanner_pullback_tightness_ratio": scanner_decision.metrics.get("pullback_tightness_ratio"),
             },
         )
 

@@ -15,6 +15,11 @@ class ImpulseAssessment:
     side: Side
     body_ratio: float
     volume_ratio: float
+    range_ratio: float
+    close_position: float
+    efficiency: float
+    quality_score: float
+    tier: str
     reasons: tuple[str, ...]
 
 
@@ -25,6 +30,9 @@ class PullbackAssessment:
     valid: bool
     retracement_depth_ratio: float
     mean_body_ratio_to_impulse: float
+    overlap_ratio: float
+    tightness_ratio: float
+    counter_pressure_ratio: float
     orderliness_score: float
+    quality_label: str
     reasons: tuple[str, ...]
-

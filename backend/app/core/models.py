@@ -77,7 +77,7 @@ class ScannerDecision:
     momentum_score: float
     pullback_score: float
     reasons: tuple[str, ...]
-    metrics: dict[str, float] = field(default_factory=dict)
+    metrics: dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_tradeable(self) -> bool:

@@ -395,8 +395,17 @@ class ScannerConfig:
 
     min_impulse_body_ratio: float = 1.5
     min_volume_ratio: float = 1.2
+    min_impulse_range_ratio: float = 1.35
+    min_impulse_close_position: float = 0.68
+    min_impulse_efficiency: float = 0.55
+    strong_impulse_body_ratio: float = 1.85
+    strong_impulse_volume_ratio: float = 1.45
+    explosive_impulse_body_ratio: float = 2.25
+    explosive_impulse_volume_ratio: float = 1.85
     max_pullback_depth_ratio: float = 0.8
     max_pullback_body_ratio: float = 0.75
+    max_pullback_range_ratio: float = 0.65
+    min_pullback_overlap_ratio: float = 0.2
     min_pullback_bars: int = 1
     max_pullback_bars: int = 3
     compression_lookback: int = 5
@@ -406,8 +415,17 @@ class ScannerConfig:
         return cls(
             min_impulse_body_ratio=float(payload.get("min_impulse_body_ratio", 1.5)),
             min_volume_ratio=float(payload.get("min_volume_ratio", 1.2)),
+            min_impulse_range_ratio=float(payload.get("min_impulse_range_ratio", 1.35)),
+            min_impulse_close_position=float(payload.get("min_impulse_close_position", 0.68)),
+            min_impulse_efficiency=float(payload.get("min_impulse_efficiency", 0.55)),
+            strong_impulse_body_ratio=float(payload.get("strong_impulse_body_ratio", 1.85)),
+            strong_impulse_volume_ratio=float(payload.get("strong_impulse_volume_ratio", 1.45)),
+            explosive_impulse_body_ratio=float(payload.get("explosive_impulse_body_ratio", 2.25)),
+            explosive_impulse_volume_ratio=float(payload.get("explosive_impulse_volume_ratio", 1.85)),
             max_pullback_depth_ratio=float(payload.get("max_pullback_depth_ratio", 0.8)),
             max_pullback_body_ratio=float(payload.get("max_pullback_body_ratio", 0.75)),
+            max_pullback_range_ratio=float(payload.get("max_pullback_range_ratio", 0.65)),
+            min_pullback_overlap_ratio=float(payload.get("min_pullback_overlap_ratio", 0.2)),
             min_pullback_bars=int(payload.get("min_pullback_bars", 1)),
             max_pullback_bars=int(payload.get("max_pullback_bars", 3)),
             compression_lookback=int(payload.get("compression_lookback", 5)),
@@ -421,6 +439,9 @@ class StrategyTriggerConfig:
     require_breakout_close: bool = True
     min_close_position: float = 0.7
     min_body_ratio: float = 1.2
+    max_body_ratio: float = 4.0
+    max_breakout_extension_ratio: float = 0.35
+    min_pre_breakout_tightness_score: float = 0.3
     stop_buffer_ratio: float = 0.05
 
     @classmethod
@@ -429,6 +450,9 @@ class StrategyTriggerConfig:
             require_breakout_close=_as_bool(payload.get("require_breakout_close", True)),
             min_close_position=float(payload.get("min_close_position", 0.7)),
             min_body_ratio=float(payload.get("min_body_ratio", 1.2)),
+            max_body_ratio=float(payload.get("max_body_ratio", 4.0)),
+            max_breakout_extension_ratio=float(payload.get("max_breakout_extension_ratio", 0.35)),
+            min_pre_breakout_tightness_score=float(payload.get("min_pre_breakout_tightness_score", 0.3)),
             stop_buffer_ratio=float(payload.get("stop_buffer_ratio", 0.05)),
         )
 

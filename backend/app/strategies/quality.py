@@ -27,6 +27,7 @@ def assess_setup_quality(
     scanner_decision: ScannerDecision,
     trigger_body_ratio: float,
     trigger_close_position: float,
+    entry_timing_score: float,
     context: ContextAssessment,
     market_state: MarketStateAssessment,
     session: SessionAssessment,
@@ -34,9 +35,24 @@ def assess_setup_quality(
 ) -> SetupQualityAssessment:
     """Grade a setup without changing the underlying pattern definition."""
 
-    momentum_component = min(1.0, scanner_decision.momentum_score / 1.6)
+    impulse_component = max(
+        0.0,
+        min(
+            1.0,
+            float(scanner_decision.metrics.get("impulse_quality_score", scanner_decision.momentum_score)),
+        ),
+    )
     pullback_component = max(0.0, min(1.0, scanner_decision.pullback_score))
-    trigger_component = max(0.0, min(1.0, ((min(2.0, trigger_body_ratio) / 2.0) + trigger_close_position) / 2.0))
+    trigger_component = max(
+        0.0,
+        min(1.0, ((min(2.0, trigger_body_ratio) / 2.0) + trigger_close_position) / 2.0),
+    )
+    pullback_label = str(scanner_decision.metrics.get("pullback_quality_label", "neutral"))
+    pullback_label_component = {
+        "clean": 1.0,
+        "neutral": 0.72,
+        "aggressive": 0.3,
+    }.get(pullback_label, 0.65)
     context_component = {
         "aligned": 1.0,
         "neutral": 0.7,
@@ -62,12 +78,14 @@ def assess_setup_quality(
     }.get(session.phase, 0.75)
 
     score = (
-        momentum_component * 0.22
-        + pullback_component * 0.22
-        + trigger_component * 0.22
-        + context_component * 0.14
-        + market_component * 0.12
-        + session_component * 0.08
+        impulse_component * 0.18
+        + pullback_component * 0.18
+        + pullback_label_component * 0.12
+        + trigger_component * 0.18
+        + max(0.0, min(1.0, entry_timing_score)) * 0.14
+        + context_component * 0.1
+        + market_component * 0.06
+        + session_component * 0.04
     )
     score = max(0.0, min(1.0, score))
     if score >= config.strong_score:
@@ -89,6 +107,8 @@ def assess_setup_quality(
     reasons = (
         f"setup quality score {score:.2f}",
         f"quality tier: {label}",
+        f"impulse tier: {scanner_decision.metrics.get('impulse_tier', 'unknown')}",
+        f"pullback structure: {pullback_label}",
     )
     return SetupQualityAssessment(
         score=score,
