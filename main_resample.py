@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 
 from backend.app.console import CommandDashboard
+from backend.app.config.models import history_path_label
 from backend.app.data import MarketDataDownloader, TimeframeBuilder
 from backend.app.main import create_app
 
@@ -24,8 +25,30 @@ def main() -> None:
         app.config.system.storage.root
         / symbol
         / app.config.system.market.base_timeframe
+        / (
+            f"{symbol}_{app.config.system.market.base_timeframe}_"
+            f"{history_path_label(start_date)}_to_{history_path_label(end_date)}.csv"
+        )
+    )
+    legacy_base_path = (
+        app.config.system.storage.root
+        / symbol
+        / app.config.system.market.base_timeframe
         / f"{symbol}_{app.config.system.market.base_timeframe}_{start_date}_to_{end_date}.csv"
     )
+    legacy_date_only_base_path = (
+        app.config.system.storage.root
+        / symbol
+        / app.config.system.market.base_timeframe
+        / (
+            f"{symbol}_{app.config.system.market.base_timeframe}_"
+            f"{str(start_date).split(' ', maxsplit=1)[0]}_to_{str(end_date).split(' ', maxsplit=1)[0]}.csv"
+        )
+    )
+    if not base_path.exists() and legacy_base_path.exists():
+        base_path = legacy_base_path
+    elif not base_path.exists() and legacy_date_only_base_path.exists():
+        base_path = legacy_date_only_base_path
     with CommandDashboard("Resample Pipeline", subtitle="Canonical 1m -> derived frames") as dashboard:
         dashboard.emit(
             "context",

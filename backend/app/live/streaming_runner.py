@@ -222,7 +222,12 @@ class StreamingLiveRunner(ForwardRunner):
                 )
                 frames = self.timeframe_builder.build_timeframes(base_df)
                 candles_by_timeframe = {
-                    timeframe: dataframe_to_candles(frame, symbol=symbol, timeframe=timeframe)
+                    timeframe: dataframe_to_candles(
+                        frame,
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        index_is_close_time=(timeframe != self.config.system.market.base_timeframe),
+                    )
                     for timeframe, frame in frames.items()
                 }
                 execution_series = candles_by_timeframe.get(execution_timeframe, ())

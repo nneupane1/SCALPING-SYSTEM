@@ -94,7 +94,12 @@ class ReplayRunner:
 
         frames = self.timeframe_builder.build_timeframes(df_1m)
         candles_by_timeframe = {
-            timeframe: dataframe_to_candles(frame, symbol=symbol, timeframe=timeframe)
+            timeframe: dataframe_to_candles(
+                frame,
+                symbol=symbol,
+                timeframe=timeframe,
+                index_is_close_time=(timeframe != self.config.system.market.base_timeframe),
+            )
             for timeframe, frame in frames.items()
         }
 

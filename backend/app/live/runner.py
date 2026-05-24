@@ -168,7 +168,12 @@ class ForwardRunner:
             base_df = self._merge_recent_history(base_df=base_df, recent_df=recent_df, warmup_limit=forward_cfg.warmup_base_candles)
             frames = self.timeframe_builder.build_timeframes(base_df)
             candles_by_timeframe = {
-                timeframe: dataframe_to_candles(frame, symbol=symbol, timeframe=timeframe)
+                timeframe: dataframe_to_candles(
+                    frame,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    index_is_close_time=(timeframe != self.config.system.market.base_timeframe),
+                )
                 for timeframe, frame in frames.items()
             }
             execution_series = candles_by_timeframe.get(execution_timeframe, ())
@@ -341,6 +346,7 @@ class ForwardRunner:
             execution_frame,
             symbol=self.config.system.market.symbol,
             timeframe=self.config.system.market.execution_timeframe,
+            index_is_close_time=True,
         )
         if not candles:
             return None

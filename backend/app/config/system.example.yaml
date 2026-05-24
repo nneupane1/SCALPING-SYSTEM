@@ -93,6 +93,10 @@ backtest:
   save_every_steps: 100
   output_dir: "backtest/output"
   resume_enabled: true
+  gap_aware: true
+  force_flat_before_gap: true
+  post_gap_cooldown_bars: 1
+  output_gap_windows: true
 
 replay:
   enabled: true

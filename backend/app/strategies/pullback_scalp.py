@@ -39,20 +39,27 @@ class PullbackScalpStrategy(BaseStrategy):
         self.execution_timeframe = execution_timeframe
         self.profile = profile
         self.sessions_config = sessions_config
+        self.last_rejection_reason: str | None = None
 
     def evaluate(self, snapshot: MarketSnapshot, scanner_decision: ScannerDecision) -> TradeSignal | None:
-        if not scanner_decision.is_tradeable:
+        self.last_rejection_reason = None
+
+        def block(reason: str) -> None:
+            self.last_rejection_reason = reason
             return None
+
+        if not scanner_decision.is_tradeable:
+            return block("scanner decision is not tradeable")
 
         current = snapshot.latest(self.execution_timeframe)
         if current is None or scanner_decision.side is None:
-            return None
+            return block("missing execution candle or scanner side")
 
         side = scanner_decision.side
         if side is Side.LONG and not self.strategy_config.allow_long:
-            return None
+            return block("long entries disabled by strategy config")
         if side is Side.SHORT and not self.strategy_config.allow_short:
-            return None
+            return block("short entries disabled by strategy config")
 
         reference = snapshot.series(self.execution_timeframe)[-6:-1]
         reference_mean_body = fmean(candle.body_size for candle in reference) if reference else 0.0
@@ -89,41 +96,41 @@ class PullbackScalpStrategy(BaseStrategy):
 
         reasons: list[str] = []
         if not breakout_happened:
-            return None
+            return block("trigger candle did not breach pullback structure")
         reasons.append("trigger candle breached the pullback structure")
 
         if self.trigger_config.require_breakout_close and not breakout_confirmed:
-            return None
+            return block("trigger candle did not close beyond breakout level")
         if self.trigger_config.require_breakout_close:
             reasons.append("trigger candle closed beyond the breakout level")
 
         if not directional_candle:
-            return None
+            return block("trigger candle did not close in trade direction")
         reasons.append("trigger candle closed in the direction of the trade")
 
         if trigger_body_ratio < self.trigger_config.min_body_ratio:
-            return None
+            return block("trigger candle body expansion is too weak")
         reasons.append("trigger candle body expansion confirms resumed imbalance")
 
         if trigger_body_ratio > self.trigger_config.max_body_ratio:
-            return None
+            return block("trigger candle looks too extended or exhausted")
         reasons.append("trigger candle is not so extended that it looks exhausted")
 
         if trigger_close_position < self.trigger_config.min_close_position:
-            return None
+            return block("trigger candle close is not near directional extreme")
         reasons.append("trigger candle close is near the directional extreme")
 
         if breakout_extension_ratio > self.trigger_config.max_breakout_extension_ratio:
-            return None
+            return block("entry would chase too far beyond structure")
         reasons.append("entry is still close enough to structure to avoid late chase risk")
 
         if pre_breakout_tightness_score < self.trigger_config.min_pre_breakout_tightness_score:
-            return None
+            return block("pre-trigger structure is not tight enough")
         reasons.append("breakout emerges from sufficiently tight pre-trigger structure")
 
         risk_per_unit = abs(entry_price - stop_price)
         if risk_per_unit <= 0:
-            return None
+            return block("risk per unit resolved to zero or invalid")
         first_target_price = entry_price + (risk_per_unit * side.multiplier)
         breakout_freshness_score = max(
             0.0,
@@ -180,7 +187,7 @@ class PullbackScalpStrategy(BaseStrategy):
         )
         session = self._assess_session(snapshot)
         if not session.active:
-            return None
+            return block(session.reasons[0] if session.reasons else "session filter blocked entry")
         market_state = assess_market_state(
             snapshot=snapshot,
             side=side,
@@ -188,9 +195,9 @@ class PullbackScalpStrategy(BaseStrategy):
             execution_timeframe=self.execution_timeframe,
         )
         if market_state.no_trade:
-            return None
+            return block(market_state.reasons[0] if market_state.reasons else "market state no-trade filter blocked entry")
         if context.alignment == "conflicting" and self.filter_config.context.block_on_conflict:
-            return None
+            return block("15m context conflict blocked entry")
 
         quality = assess_setup_quality(
             scanner_decision=scanner_decision,
@@ -203,7 +210,7 @@ class PullbackScalpStrategy(BaseStrategy):
             config=self.filter_config.quality,
         )
         if self.filter_config.quality.enabled and quality.label == "reject":
-            return None
+            return block("setup quality rejected the entry")
 
         confidence = max(
             0.0,

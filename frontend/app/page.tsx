@@ -11,6 +11,7 @@ export default function HomePage() {
           designed to show why the system is acting, not just what price is doing.
         </p>
         <nav className="nav">
+          <Link href="/backtest">Backtest</Link>
           <Link href="/dashboard">Dashboard</Link>
           <Link href="/replay">Replay</Link>
           <Link href="/portfolio">Portfolio</Link>
@@ -19,4 +20,3 @@ export default function HomePage() {
     </main>
   );
 }
-

@@ -54,7 +54,7 @@ class TradingEngine:
         self.event_bus = event_bus
         self.session_timezone = session_timezone
 
-    def process_snapshot(self, snapshot: MarketSnapshot) -> EngineCycleResult:
+    def process_snapshot(self, snapshot: MarketSnapshot, *, allow_new_entries: bool = True) -> EngineCycleResult:
         """Run one full market-state evaluation pass."""
 
         self.event_bus.publish(Event(EventTopic.SNAPSHOT_READY, snapshot))
@@ -80,11 +80,23 @@ class TradingEngine:
                 if closed_trade is not None:
                     self.portfolio_manager.close_position(closed_trade)
             self.portfolio_manager.sync_active_position(active_position)
-        elif latest_candle is not None:
+        elif latest_candle is not None and allow_new_entries:
             scanner_decision = self.scanner.scan(snapshot)
             self.event_bus.publish(Event(EventTopic.SCANNER_UPDATED, scanner_decision))
             if scanner_decision.is_tradeable:
                 signal = self.strategy.evaluate(snapshot, scanner_decision)
+                if signal is None:
+                    rejection_reason = getattr(self.strategy, "last_rejection_reason", None)
+                    if rejection_reason:
+                        self.event_bus.publish(
+                            Event(
+                                EventTopic.HEALTH,
+                                {
+                                    "stage": "strategy_block",
+                                    "message": rejection_reason,
+                                },
+                            )
+                        )
                 if signal is not None:
                     signal = self._apply_day_feedback(signal=signal, occurred_at=latest_candle.close_time)
                 if signal is not None:

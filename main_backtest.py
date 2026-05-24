@@ -17,16 +17,23 @@ def main() -> None:
     args = parser.parse_args()
 
     app = create_app()
+    active_windows = " | ".join(
+        f"{window.name} {window.start}-{window.end}"
+        for window in app.config.system.sessions.active_windows
+    )
     with CommandDashboard("Backtest Runner", subtitle="Checkpointed historical simulation") as dashboard:
         dashboard.emit(
             "context",
             context={
                 "symbol": args.symbol or app.config.system.market.symbol,
                 "execution_timeframe": app.config.system.market.execution_timeframe,
+                "base_timeframe": app.config.system.market.base_timeframe,
                 "range": (
                     f"{args.start_date or app.config.system.history.start_date} -> "
                     f"{args.end_date or app.config.system.history.end_date}"
                 ),
+                "session_timezone": app.config.system.sessions.timezone,
+                "active_sessions": active_windows or "disabled",
             },
         )
         runner = BacktestRunner(app.config, progress_callback=dashboard.emit)
@@ -45,6 +52,9 @@ def main() -> None:
                 "closed_trades": summary.closed_trades,
                 "equity": f"{summary.current_equity:.2f}",
                 "realized_pnl": f"{summary.realized_pnl:.2f}",
+                "gap_windows": summary.gap_windows,
+                "gap_blocked_steps": summary.gap_blocked_steps,
+                "gap_forced_exits": summary.gap_forced_exits,
             },
         )
 

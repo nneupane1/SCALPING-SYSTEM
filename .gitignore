@@ -17,6 +17,7 @@ build/
 coverage/
 logs/
 data_storage/
+audit/output/
 backtest/output/
 replay/output/
 paper/output/

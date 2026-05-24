@@ -237,3 +237,539 @@ a {
   }
 }
 
+.btShell {
+  position: relative;
+  overflow: hidden;
+}
+
+.btShell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 18% 22%, rgba(255, 176, 66, 0.18), transparent 24%),
+    radial-gradient(circle at 86% 18%, rgba(41, 214, 171, 0.16), transparent 20%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 24%);
+  mix-blend-mode: screen;
+  opacity: 0.9;
+}
+
+.btHero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.75fr);
+  gap: 18px;
+  padding: 28px;
+  border-radius: 28px;
+  border: 1px solid rgba(104, 147, 188, 0.22);
+  background:
+    linear-gradient(130deg, rgba(8, 15, 24, 0.96), rgba(9, 17, 28, 0.76) 48%, rgba(18, 30, 43, 0.92)),
+    radial-gradient(circle at top left, rgba(255, 176, 66, 0.12), transparent 34%);
+  box-shadow:
+    0 36px 120px rgba(0, 0, 0, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 0 0 1px rgba(45, 212, 191, 0.05);
+  position: relative;
+}
+
+.btHero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.02), transparent),
+    repeating-linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.015) 0,
+      rgba(255, 255, 255, 0.015) 1px,
+      transparent 1px,
+      transparent 5px
+    );
+  border-radius: inherit;
+}
+
+.btHeroCopy {
+  display: grid;
+  gap: 14px;
+  position: relative;
+  z-index: 1;
+}
+
+.btEyebrow {
+  color: #ffbf63;
+  font-size: 12px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+}
+
+.btHero h1 {
+  margin: 0;
+  max-width: 14ch;
+  font-family: "Bahnschrift", "Aptos", "Segoe UI", sans-serif;
+  font-size: clamp(2rem, 4vw, 4.4rem);
+  line-height: 0.96;
+  letter-spacing: -0.04em;
+}
+
+.btHero p {
+  margin: 0;
+  max-width: 62ch;
+  color: #bdd3e7;
+  line-height: 1.6;
+}
+
+.btHeroMeta,
+.btProgressDeck {
+  position: relative;
+  z-index: 1;
+}
+
+.btHeroMeta {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(122, 160, 196, 0.18);
+  background: rgba(4, 11, 18, 0.72);
+  align-content: start;
+}
+
+.btHeroMetaLine {
+  display: grid;
+  gap: 4px;
+}
+
+.btHeroMetaLine span,
+.btToggleRow .subtle {
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.btToggleRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.btToggle {
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(108, 144, 180, 0.22);
+  background: rgba(7, 15, 23, 0.84);
+  color: var(--text);
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.btToggle:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 190, 73, 0.42);
+}
+
+.btToggle.is-on {
+  background: rgba(255, 191, 99, 0.12);
+  border-color: rgba(255, 191, 99, 0.4);
+  color: #ffd69b;
+}
+
+.btProgressDeck {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+  padding: 18px 18px 14px;
+  border-radius: 20px;
+  border: 1px solid rgba(108, 144, 180, 0.16);
+  background: rgba(4, 11, 18, 0.72);
+}
+
+.btProgressCopy {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.btProgressCopy strong {
+  color: var(--text);
+  font-size: 14px;
+  letter-spacing: 0.04em;
+}
+
+.btProgressCopy-bottom strong {
+  color: #ffe4b7;
+}
+
+.btProgressBar {
+  position: relative;
+  height: 14px;
+  overflow: hidden;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01)),
+    rgba(11, 19, 29, 0.9);
+  border: 1px solid rgba(108, 144, 180, 0.14);
+}
+
+.btProgressFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(90deg, rgba(49, 208, 165, 0.72), rgba(255, 189, 84, 0.96)),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.22), transparent 60%);
+  box-shadow: 0 0 34px rgba(49, 208, 165, 0.36);
+}
+
+.btMetricDeck {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.btMetric {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(108, 144, 180, 0.14);
+  background:
+    linear-gradient(180deg, rgba(15, 24, 35, 0.92), rgba(8, 14, 22, 0.92)),
+    rgba(8, 14, 22, 0.92);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.btMetricLabel {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.btMetricValue {
+  font-size: clamp(1.35rem, 2vw, 2.15rem);
+  line-height: 1;
+}
+
+.btMetricDetail {
+  color: #abc4da;
+  font-size: 12px;
+}
+
+.btMetric-up .btMetricValue {
+  color: #67f1be;
+}
+
+.btMetric-down .btMetricValue {
+  color: #ff9b86;
+}
+
+.btMetric-signal .btMetricValue {
+  color: #ffd080;
+}
+
+.btErrorBanner {
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 133, 133, 0.24);
+  background: rgba(76, 18, 25, 0.72);
+  color: #ffd6d6;
+}
+
+.btGridMain {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.85fr);
+  gap: 16px;
+}
+
+.btGridSecondary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.btSideStack {
+  display: grid;
+  gap: 16px;
+}
+
+.btPanel {
+  border: 1px solid rgba(108, 144, 180, 0.14);
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, rgba(13, 22, 32, 0.94), rgba(8, 14, 22, 0.92)),
+    rgba(8, 14, 22, 0.92);
+  backdrop-filter: blur(18px);
+  padding: 18px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 18px 70px rgba(0, 0, 0, 0.24);
+}
+
+.btPanel-cinema {
+  padding-bottom: 14px;
+}
+
+.btPanelHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.btPanelHeader h3 {
+  margin: 0;
+  font-family: "Bahnschrift", "Aptos", "Segoe UI", sans-serif;
+  font-size: 1.1rem;
+  letter-spacing: 0.02em;
+}
+
+.btPanelHeader p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.btBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  border: 1px solid rgba(108, 144, 180, 0.16);
+  background: rgba(7, 15, 23, 0.84);
+}
+
+.btBadgeDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 16px currentColor;
+}
+
+.btBadge-running {
+  color: #ffd080;
+}
+
+.btBadge-completed {
+  color: #67f1be;
+}
+
+.btBadge-paused {
+  color: #92c7ff;
+}
+
+.btBadge-idle {
+  color: #c0d0df;
+}
+
+.btCinemaFrame,
+.btEquityFrame {
+  position: relative;
+  overflow: hidden;
+  border-radius: 20px;
+  border: 1px solid rgba(108, 144, 180, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 187, 75, 0.05), transparent 38%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.01)),
+    rgba(5, 12, 18, 0.9);
+}
+
+.btCinemaFrame {
+  min-height: 520px;
+}
+
+.btEquityFrame {
+  min-height: 250px;
+}
+
+.btCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 520px;
+}
+
+.btCanvas-short {
+  min-height: 250px;
+}
+
+.btCinemaOverlay {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.btCinemaOverlay > div {
+  min-width: 112px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(108, 144, 180, 0.14);
+  background: rgba(6, 13, 20, 0.78);
+  backdrop-filter: blur(16px);
+}
+
+.btCinemaOverlay span,
+.btTapeStats span,
+.btStatementCard span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.btTapeStats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.btTapeStats > div,
+.btStatementCard {
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(108, 144, 180, 0.12);
+  background: rgba(8, 15, 23, 0.76);
+}
+
+.btStatementGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.btAnomalyList {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.btAnomalyRow {
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 190, 87, 0.18);
+  background: rgba(58, 34, 9, 0.32);
+  color: #ffe0af;
+  line-height: 1.5;
+}
+
+.btBreakdownList,
+.btTable {
+  display: grid;
+  gap: 10px;
+}
+
+.btBreakdownRow,
+.btTableRow {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(108, 144, 180, 0.12);
+  background: rgba(8, 15, 23, 0.76);
+}
+
+.btBreakdownMeta,
+.btTableTitle {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.btBreakdownMeta span,
+.btTradeMeta {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.btTradeMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.btBreakdownBar {
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(11, 19, 29, 0.88);
+  border: 1px solid rgba(108, 144, 180, 0.12);
+}
+
+.btBreakdownFill {
+  height: 100%;
+  border-radius: inherit;
+}
+
+.btBreakdownFill-up {
+  background: linear-gradient(90deg, rgba(60, 224, 174, 0.75), rgba(120, 252, 205, 0.96));
+}
+
+.btBreakdownFill-down {
+  background: linear-gradient(90deg, rgba(255, 164, 112, 0.75), rgba(246, 110, 95, 0.96));
+}
+
+.btBreakdownValue,
+.btTradeNumbers {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.btEmptyState {
+  padding: 18px;
+  border-radius: 16px;
+  border: 1px dashed rgba(108, 144, 180, 0.18);
+  color: var(--muted);
+  text-align: center;
+}
+
+@media (max-width: 1280px) {
+  .btMetricDeck,
+  .btGridSecondary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .btGridMain {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 960px) {
+  .btHero,
+  .btMetricDeck,
+  .btGridSecondary,
+  .btTapeStats,
+  .btStatementGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .btHero {
+    padding: 20px;
+  }
+
+  .btCanvas,
+  .btCanvas-short,
+  .btCinemaFrame,
+  .btEquityFrame {
+    min-height: 260px;
+  }
+}

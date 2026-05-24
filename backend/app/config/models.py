@@ -331,6 +331,10 @@ class RuntimeCheckpointConfig:
     save_every_steps: int = 100
     output_dir: str = "output"
     resume_enabled: bool = True
+    gap_aware: bool = True
+    force_flat_before_gap: bool = True
+    post_gap_cooldown_bars: int = 1
+    output_gap_windows: bool = True
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "RuntimeCheckpointConfig":
@@ -341,6 +345,10 @@ class RuntimeCheckpointConfig:
             save_every_steps=int(payload.get("save_every_steps", 100)),
             output_dir=str(payload.get("output_dir", "output")),
             resume_enabled=_as_bool(payload.get("resume_enabled", True)),
+            gap_aware=_as_bool(payload.get("gap_aware", True)),
+            force_flat_before_gap=_as_bool(payload.get("force_flat_before_gap", True)),
+            post_gap_cooldown_bars=int(payload.get("post_gap_cooldown_bars", 1)),
+            output_gap_windows=_as_bool(payload.get("output_gap_windows", True)),
         )
 
 

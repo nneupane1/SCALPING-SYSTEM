@@ -56,6 +56,14 @@ class TimeframeBuilder:
                 self._last_incomplete_signature = signature
         return df_resampled
 
+    def _expected_rows_per_bucket(self, rule: str) -> int:
+        base_rule = self._to_pandas_rule(self.config.system.market.base_timeframe)
+        base_seconds = int(pd.Timedelta(pd.tseries.frequencies.to_offset(base_rule)).total_seconds())
+        target_seconds = int(pd.Timedelta(pd.tseries.frequencies.to_offset(rule)).total_seconds())
+        if target_seconds % base_seconds != 0:
+            raise ValueError("Target timeframe must be an integer multiple of the base timeframe.")
+        return target_seconds // base_seconds
+
     def resample(self, df: pd.DataFrame, rule: str) -> pd.DataFrame:
         start = time.time()
         self._emit(
@@ -65,8 +73,15 @@ class TimeframeBuilder:
             detail=f"building {rule} from {self.config.system.market.base_timeframe}",
         )
         pandas_rule = self._to_pandas_rule(rule)
+        source = df.sort_index()
+        expected_rows = self._expected_rows_per_bucket(pandas_rule)
+        bucket_counts = source.resample(
+            pandas_rule,
+            closed=self.resample_config.closed,
+            label=self.resample_config.label,
+        ).size()
         df_resampled = (
-            df.resample(
+            source.resample(
                 pandas_rule,
                 closed=self.resample_config.closed,
                 label=self.resample_config.label,
@@ -80,7 +95,16 @@ class TimeframeBuilder:
             })
             .dropna()
         )
-        df_resampled = self._drop_incomplete_resampled_candles(df, df_resampled)
+        complete_labels = bucket_counts[bucket_counts == expected_rows].index
+        before_gap_filter = len(df_resampled)
+        df_resampled = df_resampled.loc[df_resampled.index.isin(complete_labels)]
+        removed_for_internal_gaps = before_gap_filter - len(df_resampled)
+        if removed_for_internal_gaps:
+            self._log(
+                f"Removed {removed_for_internal_gaps} resampled candle(s) with internal base-timeframe gaps.",
+                level="warning",
+            )
+        df_resampled = self._drop_incomplete_resampled_candles(source, df_resampled)
         self._emit(
             "metrics",
             metrics={
@@ -137,7 +161,7 @@ class TimeframeBuilder:
                 / f"{symbol}_{timeframe}_{history_path_label(start_date)}_to_{history_path_label(end_date)}.csv"
             )
             t0 = time.time()
-            frame.to_csv(path)
+            frame.to_csv(path, index_label="timestamp")
             self._emit(
                 "progress",
                 description=f"Saving resampled frames for {symbol}",

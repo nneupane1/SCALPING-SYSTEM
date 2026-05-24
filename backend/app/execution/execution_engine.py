@@ -36,12 +36,13 @@ class ExecutionEngine:
                 raise ValueError(
                     f"Execution slippage {fill_slippage_bps:.2f} bps exceeds allowed buffer {allowed_slippage_bps:.2f} bps."
                 )
+        opened_at = signal.generated_at if fill.simulated else fill.filled_at
         position = OpenPosition(
             broker_metadata=self._build_entry_broker_metadata(fill),
             symbol=signal.symbol,
             timeframe=signal.timeframe,
             side=signal.side,
-            opened_at=fill.filled_at,
+            opened_at=opened_at,
             entry_price=fill.average_price,
             stop_price=signal.stop_price,
             initial_stop_price=signal.stop_price,

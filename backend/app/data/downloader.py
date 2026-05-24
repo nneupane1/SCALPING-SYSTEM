@@ -80,24 +80,168 @@ class MarketDataDownloader:
     def _read_ohlcv_csv(path: Path, *, timestamp_only: bool = False) -> pd.DataFrame:
         read_kwargs = {
             "parse_dates": ["timestamp"],
+            "on_bad_lines": "skip",
         }
         if timestamp_only:
             read_kwargs["usecols"] = ["timestamp"]
         else:
             read_kwargs["usecols"] = ["timestamp", "open", "high", "low", "close", "volume"]
         try:
-            return pd.read_csv(path, **read_kwargs)
-        except pd.errors.ParserError:
+            df = pd.read_csv(path, **read_kwargs)
+        except (pd.errors.ParserError, ValueError):
             columns = ["timestamp", "open", "high", "low", "close", "volume", "_extra"]
             usecols = [0] if timestamp_only else [0, 1, 2, 3, 4, 5]
-            return pd.read_csv(
+            df = pd.read_csv(
                 path,
                 header=0,
                 names=columns,
                 usecols=usecols,
                 parse_dates=["timestamp"],
+                on_bad_lines="skip",
                 engine="python",
             )
+        if "timestamp" in df.columns:
+            df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+            df = df[df["timestamp"].notna()].copy()
+        return df
+
+    @staticmethod
+    def _interval_delta(interval: str) -> pd.Timedelta:
+        unit = interval[-1].lower()
+        magnitude = int(interval[:-1])
+        if unit == "m":
+            return pd.Timedelta(minutes=magnitude)
+        if unit == "h":
+            return pd.Timedelta(hours=magnitude)
+        raise ValueError(f"Unsupported interval: {interval}")
+
+    @classmethod
+    def _missing_ranges(
+        cls,
+        df: pd.DataFrame,
+        *,
+        interval: str,
+        start_bound: pd.Timestamp,
+        end_bound: pd.Timestamp,
+    ) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+        step = cls._interval_delta(interval)
+        expected_last = end_bound - step
+        ranges: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+        if df.empty:
+            if start_bound <= expected_last:
+                ranges.append((start_bound, expected_last))
+            return ranges
+
+        ordered = df.sort_index()
+        first = pd.Timestamp(ordered.index[0])
+        last = pd.Timestamp(ordered.index[-1])
+        if first > start_bound:
+            ranges.append((start_bound, first - step))
+
+        previous = first
+        for current in ordered.index[1:]:
+            current_ts = pd.Timestamp(current)
+            if current_ts - previous > step:
+                ranges.append((previous + step, current_ts - step))
+            previous = current_ts
+
+        if last < expected_last:
+            ranges.append((last + step, expected_last))
+
+        return [(start, end) for start, end in ranges if start <= end]
+
+    def _fetch_missing_range(
+        self,
+        *,
+        symbol: str,
+        interval: str,
+        range_start: pd.Timestamp,
+        range_end: pd.Timestamp,
+    ) -> pd.DataFrame:
+        step = self._interval_delta(interval)
+        current_start = self._to_utc_ms(range_start)
+        end_limit = self._to_utc_ms(range_end + step)
+        frames: list[pd.DataFrame] = []
+
+        while current_start < end_limit:
+            raw = self.client.get_klines(
+                symbol=symbol,
+                interval=interval,
+                start_time=current_start,
+                end_time=end_limit,
+                limit=self.config.system.binance.historical_limit,
+                verbose=False,
+            )
+            if not raw:
+                break
+            batch = self.klines_to_df(
+                raw,
+                closed_only=self.config.system.binance.closed_klines_only,
+                announce_removed=False,
+            )
+            frames.append(batch)
+            last_timestamp = pd.Timestamp(batch.index[-1])
+            current_start = self._to_utc_ms(last_timestamp + step)
+            if len(batch) < self.config.system.binance.historical_limit:
+                break
+
+        if not frames:
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        combined = pd.concat(frames).sort_index()
+        combined = combined.loc[(combined.index >= range_start) & (combined.index <= range_end)]
+        return self._validate_ohlcv(combined)
+
+    def _repair_missing_intervals(
+        self,
+        df: pd.DataFrame,
+        *,
+        symbol: str,
+        interval: str,
+        start_bound: pd.Timestamp,
+        end_bound: pd.Timestamp,
+    ) -> pd.DataFrame:
+        missing_ranges = self._missing_ranges(
+            df,
+            interval=interval,
+            start_bound=start_bound,
+            end_bound=end_bound,
+        )
+        if not missing_ranges:
+            return df
+
+        self._log(
+            f"Detected {len(missing_ranges)} missing {interval} range(s) during finalization; attempting targeted repair.",
+            level="warning",
+        )
+        repairs: list[pd.DataFrame] = []
+        repaired_rows = 0
+        for range_start, range_end in missing_ranges:
+            repaired = self._fetch_missing_range(
+                symbol=symbol,
+                interval=interval,
+                range_start=range_start,
+                range_end=range_end,
+            )
+            if repaired.empty:
+                self._log(
+                    f"Unable to backfill missing range {range_start} -> {range_end}.",
+                    level="error",
+                )
+                continue
+            repaired_rows += len(repaired)
+            repairs.append(repaired)
+
+        if not repairs:
+            return df
+
+        merged = pd.concat([df, *repairs]).sort_index()
+        merged = merged[~merged.index.duplicated(keep="last")]
+        merged = self._validate_ohlcv(merged)
+        self._log(
+            f"Backfilled {repaired_rows} {interval} candle(s) from Binance during finalization.",
+            level="success",
+        )
+        return merged
 
     @staticmethod
     def klines_to_df(
@@ -129,7 +273,7 @@ class MarketDataDownloader:
         )
 
         if closed_only:
-            now_ms = now_ms or int(pd.Timestamp.utcnow().timestamp() * 1000)
+            now_ms = now_ms or int(pd.Timestamp.now(tz="UTC").timestamp() * 1000)
             df["close_time"] = pd.to_numeric(df["close_time"], errors="raise")
             before = len(df)
             df = df[df["close_time"] <= now_ms]
@@ -489,6 +633,13 @@ class MarketDataDownloader:
             start_bound = pd.Timestamp(start_date)
             end_bound = pd.Timestamp(end_date)
             df = df.loc[(df.index >= start_bound) & (df.index < end_bound)]
+            df = self._repair_missing_intervals(
+                df,
+                symbol=symbol,
+                interval=interval,
+                start_bound=start_bound,
+                end_bound=end_bound,
+            )
             duplicates_removed = before_dedupe - len(df)
             df.to_csv(paths["final"])
 

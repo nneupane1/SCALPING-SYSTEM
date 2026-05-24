@@ -106,3 +106,62 @@ class EquityCsvLogger:
         with self.path.open("a", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=self.FIELDNAMES)
             writer.writerow({"timestamp": timestamp, "equity": equity})
+
+
+class GapCsvLogger:
+    """Persist backtest gap windows and the applied exclusion policy."""
+
+    FIELDNAMES = [
+        "gap_id",
+        "previous_base_timestamp",
+        "next_base_timestamp",
+        "missing_start",
+        "missing_end",
+        "missing_minutes",
+        "previous_execution_index",
+        "previous_execution_close",
+        "next_execution_index",
+        "next_execution_open",
+        "next_execution_close",
+        "missing_execution_bars",
+        "blocked_entry_start_index",
+        "blocked_entry_end_index",
+        "force_flat_before_gap",
+        "post_gap_cooldown_bars",
+    ]
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def initialize(self, *, resume: bool) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if resume and self.path.exists():
+            return
+        with self.path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=self.FIELDNAMES)
+            writer.writeheader()
+
+    def write_all(self, windows) -> None:
+        with self.path.open("a", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=self.FIELDNAMES)
+            for window in windows:
+                writer.writerow(
+                    {
+                        "gap_id": window.gap_id,
+                        "previous_base_timestamp": window.previous_base_timestamp.isoformat(),
+                        "next_base_timestamp": window.next_base_timestamp.isoformat(),
+                        "missing_start": window.missing_start.isoformat(),
+                        "missing_end": window.missing_end.isoformat(),
+                        "missing_minutes": window.missing_minutes,
+                        "previous_execution_index": window.previous_execution_index,
+                        "previous_execution_close": None if window.previous_execution_close is None else window.previous_execution_close.isoformat(),
+                        "next_execution_index": window.next_execution_index,
+                        "next_execution_open": None if window.next_execution_open is None else window.next_execution_open.isoformat(),
+                        "next_execution_close": None if window.next_execution_close is None else window.next_execution_close.isoformat(),
+                        "missing_execution_bars": window.missing_execution_bars,
+                        "blocked_entry_start_index": window.blocked_entry_start_index,
+                        "blocked_entry_end_index": window.blocked_entry_end_index,
+                        "force_flat_before_gap": window.force_flat_before_gap,
+                        "post_gap_cooldown_bars": window.post_gap_cooldown_bars,
+                    }
+                )

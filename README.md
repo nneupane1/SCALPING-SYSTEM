@@ -636,6 +636,18 @@ runner writes `trades.csv` and `equity.csv` outputs, and it periodically stores
 the next replay index in a checkpoint file so a long historical pass can resume
 without discarding previous progress.
 
+The console surface for that runner is no longer limited to a static "it is
+running" message. During a historical pass, the backtest dashboard now switches
+from the preparation stage into a live execution heartbeat and exposes the
+actual simulated UTC timestamp, the corresponding configured local session time
+(`Europe/Berlin` by default), total execution-candle progress, steps per
+second, estimated time remaining, current day trade count, current realized
+`R`, latest closed-trade timestamp, latest closed-trade `R`, and the most
+common rejection reasons accumulated so far. That distinction matters because a
+multi-year `5m` backtest can otherwise look inert while it is actually
+advancing normally through overnight candles where no new trade should be
+allowed. The dashboard is meant to make that state obvious.
+
 ## Post-Backtest Validation
 
 Backtest completion is not the point at which the system is ready for paper or
@@ -752,6 +764,17 @@ Target frontend responsibilities:
 The API layer should expose both request/response endpoints and a real-time
 WebSocket stream for candles, signals, trades, portfolio state, and health
 events.
+
+The frontend is no longer only a typed shell with mock pages. There is now a
+dedicated backtest review route under `frontend/app/backtest/` backed by a
+file-reading snapshot API in `frontend/app/api/backtest/snapshot/route.ts`.
+That route reads the live-growing `backtest/output` artifacts and renders a
+high-density review cockpit with a canvas-based execution-tape view, an equity
+pane, gap-window overlays, trade markers, trade distribution panels, and recent
+closed-trade / outage ledgers. It is not yet a full TradingView-class charting
+surface with deep zoom, synchronized multi-pane crosshair behavior, or full
+multi-year virtual scrolling, but it is now a real backtest operator view
+rather than a static mock.
 
 ## Message Bus Guidance
 
@@ -1007,8 +1030,24 @@ otherwise.
 ### 6. Inspect the frontend shell
 
 The frontend now includes a typed Next.js shell under `frontend/` with mock
-dashboard, replay, and portfolio pages. It is meant to anchor component
-contracts and visual structure before live API integration.
+dashboard, replay, and portfolio pages, plus a real `/backtest` route backed by
+the filesystem snapshot API. To launch it:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Then open:
+
+```text
+http://localhost:3000/backtest
+```
+
+That route is designed for long-running historical passes. It will keep polling
+the live-growing CSV/checkpoint outputs and refresh the visual state while the
+backtest is still processing.
 
 ### 7. Continue implementation
 

@@ -71,6 +71,71 @@ class TimeframeBuilderTests(unittest.TestCase):
         self.assertEqual(0, len(frames["15m"]))
         self.assertEqual(100, int(frames["5m"]["open"].iloc[0]))
 
+    def test_builder_drops_resampled_bucket_with_internal_missing_minutes(self) -> None:
+        config = ConfigBundle(
+            system=SystemConfig.from_mapping(
+                {
+                    "app": {"name": "test", "mode": "paper", "debug": False},
+                    "account": {"initial_equity": 1000},
+                    "market": {
+                        "symbol": "BTCUSDT",
+                        "base_timeframe": "1m",
+                        "execution_timeframe": "5m",
+                        "context_timeframes": [],
+                        "supported_execution_timeframes": ["5m"],
+                    },
+                    "sessions": {"enabled": True, "timezone": "UTC", "active_windows": []},
+                    "storage": {"root": "data_storage", "cache_limit": 100},
+                    "resample": {"closed": "left", "label": "right", "drop_incomplete": True},
+                    "transport": {"websocket_broadcast_buffer": 10},
+                }
+            ),
+            strategy=StrategyConfig.from_mapping(
+                {
+                    "scanner": {
+                        "min_impulse_body_ratio": 1.5,
+                        "min_volume_ratio": 1.2,
+                        "max_pullback_depth_ratio": 0.8,
+                        "max_pullback_body_ratio": 0.75,
+                        "min_pullback_bars": 1,
+                        "max_pullback_bars": 3,
+                        "compression_lookback": 5,
+                    },
+                    "strategy": {"name": "pullback_scalp", "allow_long": True, "allow_short": True},
+                }
+            ),
+            risk=RiskConfig.from_mapping(
+                {
+                    "risk": {"risk_per_trade": 0.01},
+                    "management": {},
+                    "execution": {},
+                }
+            ),
+        )
+
+        index = pd.to_datetime(
+            [
+                "2026-01-01 10:00:00",
+                "2026-01-01 10:01:00",
+                "2026-01-01 10:03:00",
+                "2026-01-01 10:04:00",
+            ]
+        )
+        df = pd.DataFrame(
+            {
+                "open": [100, 101, 103, 104],
+                "high": [101, 102, 104, 105],
+                "low": [99, 100, 102, 103],
+                "close": [100.5, 101.5, 103.5, 104.5],
+                "volume": [10, 11, 13, 14],
+            },
+            index=index,
+        )
+
+        frames = TimeframeBuilder(config).build_timeframes(df)
+
+        self.assertEqual(0, len(frames["5m"]))
+
 
 if __name__ == "__main__":
     unittest.main()

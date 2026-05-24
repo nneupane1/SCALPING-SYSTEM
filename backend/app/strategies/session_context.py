@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 
 from backend.app.config.models import SessionsConfig, StrategyFilterConfig
@@ -40,7 +40,10 @@ def assess_session(
             reasons=(),
         )
 
-    local_timestamp = snapshot.generated_at.astimezone(ZoneInfo(sessions_config.timezone))
+    generated_at = snapshot.generated_at
+    if generated_at.tzinfo is None:
+        generated_at = generated_at.replace(tzinfo=timezone.utc)
+    local_timestamp = generated_at.astimezone(ZoneInfo(sessions_config.timezone))
     active_window = None
     for window in sessions_config.active_windows:
         start_time = _parse_clock(window.start)
