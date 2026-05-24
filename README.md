@@ -648,6 +648,13 @@ multi-year `5m` backtest can otherwise look inert while it is actually
 advancing normally through overnight candles where no new trade should be
 allowed. The dashboard is meant to make that state obvious.
 
+When the local frontend dependencies are installed, `main_backtest.py` also
+tries to improve operator flow by opening the browser viewer automatically. If
+`http://127.0.0.1:3000/backtest` is already available it simply opens the page.
+If not, it attempts to start `npm run dev` inside `frontend/`, waits for the
+route to respond, and then opens the browser. Use `python main_backtest.py
+--no-viewer` to disable that behavior explicitly.
+
 ## Post-Backtest Validation
 
 Backtest completion is not the point at which the system is ready for paper or
@@ -1025,7 +1032,8 @@ execution.allow_live_orders` is enabled it can route authenticated spot orders,
 listen to the private Binance user-data stream, and keep order state
 reconciled. The default example configuration still leaves live order routing
 disabled so the safety gate remains on until the operator explicitly chooses
-otherwise.
+otherwise. `main_backtest.py` now also attempts to open the local `/backtest`
+viewer automatically when the frontend dependencies are already installed.
 
 ### 6. Inspect the frontend shell
 

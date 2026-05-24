@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from backend.app.backtest import BacktestRunner
-from backend.app.console import CommandDashboard
+from backend.app.console import CommandDashboard, start_backtest_viewer_launcher
 from backend.app.main import create_app
 
 
@@ -14,6 +15,16 @@ def main() -> None:
     parser.add_argument("--symbol", default=None, help="Optional symbol override.")
     parser.add_argument("--start-date", default=None, help="Optional start date override.")
     parser.add_argument("--end-date", default=None, help="Optional end date override.")
+    parser.add_argument(
+        "--no-viewer",
+        action="store_true",
+        help="Do not auto-open the local /backtest browser viewer.",
+    )
+    parser.add_argument(
+        "--viewer-url",
+        default="http://127.0.0.1:3000/backtest",
+        help="Viewer URL to open automatically when the backtest starts.",
+    )
     args = parser.parse_args()
 
     app = create_app()
@@ -22,6 +33,12 @@ def main() -> None:
         for window in app.config.system.sessions.active_windows
     )
     with CommandDashboard("Backtest Runner", subtitle="Checkpointed historical simulation") as dashboard:
+        if not args.no_viewer:
+            start_backtest_viewer_launcher(
+                emit=lambda message: dashboard.emit("event", level="info", message=message),
+                url=args.viewer_url,
+                repo_root=Path(__file__).resolve().parent,
+            )
         dashboard.emit(
             "context",
             context={
