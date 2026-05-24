@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from backend.app.config.models import ConfigBundle
+from backend.app.config.models import ConfigBundle, history_path_label
 from backend.app.core import JsonCheckpointStore
 from backend.app.core.orchestrator import build_runtime
 from backend.app.data import MarketDataDownloader, TimeframeBuilder, dataframe_to_candles
@@ -104,13 +104,20 @@ class BacktestRunner:
         checkpoint_path = (
             output_dir
             / backtest_cfg.checkpoint_dir
-            / f"{symbol}_{execution_timeframe}_{start_date}_to_{end_date}{backtest_cfg.checkpoint_suffix}"
+            / (
+                f"{symbol}_{execution_timeframe}_{history_path_label(start_date)}"
+                f"_to_{history_path_label(end_date)}{backtest_cfg.checkpoint_suffix}"
+            )
         )
         checkpoint_store = JsonCheckpointStore(checkpoint_path)
         trade_logger = TradeCsvLogger(output_dir / "trades.csv")
         equity_logger = EquityCsvLogger(output_dir / "equity.csv")
 
         checkpoint = checkpoint_store.read() if backtest_cfg.resume_enabled else None
+        resume_signature = self._resume_signature(symbol=symbol, execution_timeframe=execution_timeframe)
+        if checkpoint and not self._checkpoint_compatible(checkpoint=checkpoint, resume_signature=resume_signature):
+            self._log("Ignoring incompatible backtest checkpoint and starting fresh state.", level="warning")
+            checkpoint = None
         resume = bool(checkpoint and not checkpoint.get("completed", False))
         trade_logger.initialize(resume=resume)
         equity_logger.initialize(resume=resume)
@@ -168,6 +175,7 @@ class BacktestRunner:
                         "next_index": replay_engine.cursor.index,
                         "closed_trades": len(runtime.portfolio_manager.closed_trades),
                         "equity": runtime.portfolio_manager.current_equity,
+                        "resume_signature": resume_signature,
                         "completed": False,
                         "updated_at": datetime.now(timezone.utc).isoformat(),
                     }
@@ -194,6 +202,7 @@ class BacktestRunner:
                 "next_index": replay_engine.cursor.index,
                 "closed_trades": len(runtime.portfolio_manager.closed_trades),
                 "equity": runtime.portfolio_manager.current_equity,
+                "resume_signature": resume_signature,
                 "completed": True,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -210,6 +219,22 @@ class BacktestRunner:
             realized_pnl=runtime.portfolio_manager.realized_pnl,
             output_dir=output_dir,
         )
+
+    def _resume_signature(self, *, symbol: str, execution_timeframe: str) -> dict[str, object]:
+        profile = self.config.strategy.resolve_profile(execution_timeframe)
+        return {
+            "mode": "backtest",
+            "symbol": symbol,
+            "execution_timeframe": execution_timeframe,
+            "base_timeframe": self.config.system.market.base_timeframe,
+            "starting_equity": float(self.config.system.account.initial_equity),
+            "profile_name": profile.name,
+            "risk_per_trade": float(self.config.risk.risk.risk_per_trade),
+        }
+
+    def _checkpoint_compatible(self, *, checkpoint: dict[str, object], resume_signature: dict[str, object]) -> bool:
+        checkpoint_signature = checkpoint.get("resume_signature")
+        return isinstance(checkpoint_signature, dict) and checkpoint_signature == resume_signature
 
     def _fast_forward(self, simulator: ReplaySimulator, steps: int) -> None:
         for _ in range(steps):

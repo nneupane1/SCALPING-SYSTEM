@@ -98,6 +98,13 @@ class ForwardRunner:
         )
         checkpoint_store = JsonCheckpointStore(checkpoint_path)
         checkpoint = checkpoint_store.read() if forward_cfg.resume_enabled else None
+        resume_signature = self._resume_signature(symbol=symbol, execution_timeframe=execution_timeframe)
+        if checkpoint and not self._checkpoint_compatible(checkpoint=checkpoint, resume_signature=resume_signature):
+            self._log(
+                f"Ignoring incompatible {self.mode} checkpoint and starting fresh state.",
+                level="warning",
+            )
+            checkpoint = None
         if checkpoint:
             latest_seen = checkpoint.get("latest_execution_close")
             if latest_seen:
@@ -111,6 +118,17 @@ class ForwardRunner:
         equity_logger.initialize(resume=resume_logs)
 
         base_df = self._bootstrap_base_history(symbol=symbol, forward_cfg=forward_cfg)
+        runtime_history_path = self.downloader.realtime_runtime_path(
+            symbol=symbol,
+            interval=self.config.system.market.base_timeframe,
+        )
+        last_realtime_persisted_at = self.downloader.latest_timestamp_in_csv(runtime_history_path)
+        last_realtime_persisted_at = self.downloader.append_realtime_history(
+            symbol=symbol,
+            interval=self.config.system.market.base_timeframe,
+            frame=base_df,
+            last_persisted_at=last_realtime_persisted_at,
+        )
         latest_execution_close = self._parse_timestamp(checkpoint.get("latest_execution_close")) if checkpoint else None
         if latest_execution_close is None:
             latest_execution_close = self._latest_execution_close_from_base(base_df)
@@ -141,6 +159,12 @@ class ForwardRunner:
                 limit=forward_cfg.recent_limit,
                 verbose=False,
             )
+            last_realtime_persisted_at = self.downloader.append_realtime_history(
+                symbol=symbol,
+                interval=self.config.system.market.base_timeframe,
+                frame=recent_df,
+                last_persisted_at=last_realtime_persisted_at,
+            )
             base_df = self._merge_recent_history(base_df=base_df, recent_df=recent_df, warmup_limit=forward_cfg.warmup_base_candles)
             frames = self.timeframe_builder.build_timeframes(base_df)
             candles_by_timeframe = {
@@ -168,6 +192,7 @@ class ForwardRunner:
                     runtime=runtime,
                     polls_processed=polls_processed,
                     snapshots_processed=snapshots_processed,
+                    resume_signature=resume_signature,
                     completed=False,
                 )
                 if max_polls is None or polls_processed < max_polls:
@@ -216,6 +241,7 @@ class ForwardRunner:
                     runtime=runtime,
                     polls_processed=polls_processed,
                     snapshots_processed=snapshots_processed,
+                    resume_signature=resume_signature,
                     completed=False,
                 )
             if max_polls is not None and polls_processed >= max_polls:
@@ -230,6 +256,7 @@ class ForwardRunner:
             runtime=runtime,
             polls_processed=polls_processed,
             snapshots_processed=snapshots_processed,
+            resume_signature=resume_signature,
             completed=False,
         )
         self._emit(
@@ -342,6 +369,7 @@ class ForwardRunner:
         runtime,
         polls_processed: int,
         snapshots_processed: int,
+        resume_signature: dict[str, Any],
         completed: bool,
     ) -> None:
         checkpoint_store.write(
@@ -355,10 +383,35 @@ class ForwardRunner:
                 "polls_processed": polls_processed,
                 "snapshots_processed": snapshots_processed,
                 "portfolio": self._serialize_portfolio_state(runtime.portfolio_manager),
+                "resume_signature": resume_signature,
                 "completed": completed,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
         )
+
+    def _resume_signature(self, *, symbol: str, execution_timeframe: str) -> dict[str, Any]:
+        profile = self.config.strategy.resolve_profile(execution_timeframe)
+        return {
+            "mode": self.mode,
+            "symbol": symbol,
+            "execution_timeframe": execution_timeframe,
+            "base_timeframe": self.config.system.market.base_timeframe,
+            "starting_equity": float(self.config.system.account.initial_equity),
+            "base_currency": self.config.system.account.base_currency,
+            "profile_name": profile.name,
+            "risk_per_trade": float(self.config.risk.risk.risk_per_trade),
+        }
+
+    def _checkpoint_compatible(
+        self,
+        *,
+        checkpoint: dict[str, Any],
+        resume_signature: dict[str, Any],
+    ) -> bool:
+        checkpoint_signature = checkpoint.get("resume_signature")
+        if not isinstance(checkpoint_signature, dict):
+            return False
+        return checkpoint_signature == resume_signature
 
     def _restore_runtime_state(self, runtime, checkpoint: dict[str, Any]) -> None:
         payload = checkpoint.get("portfolio")

@@ -28,6 +28,9 @@ class ConfigLoaderTests(unittest.TestCase):
                         "  symbol: BTCUSDT",
                         "  base_timeframe: 1m",
                         "  execution_timeframe: 5m",
+                        "history:",
+                        "  start_date: '2018-01-01 00:00:00'",
+                        "  end_date: 'yesterday_midnight'",
                         "sessions:",
                         "  enabled: true",
                         "  timezone: UTC",
@@ -87,6 +90,8 @@ class ConfigLoaderTests(unittest.TestCase):
 
             self.assertEqual("live", config.system.app.mode)
             self.assertEqual("BTCUSDT", config.system.market.symbol)
+            self.assertEqual("2018-01-01 00:00:00", config.system.history.start_date)
+            self.assertRegex(config.system.history.end_date, r"^\d{4}-\d{2}-\d{2} 00:00:00$")
 
     @staticmethod
     def _restore(name: str, value: str | None) -> None:

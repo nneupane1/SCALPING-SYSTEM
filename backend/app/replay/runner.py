@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from backend.app.config.models import ConfigBundle
+from backend.app.config.models import ConfigBundle, history_path_label
 from backend.app.core import JsonCheckpointStore
 from backend.app.core.orchestrator import build_runtime
 from backend.app.data import MarketDataDownloader, TimeframeBuilder, dataframe_to_candles
@@ -77,7 +77,10 @@ class ReplayRunner:
             self.config.system.storage.root
             / symbol
             / self.config.system.market.base_timeframe
-            / f"{symbol}_{self.config.system.market.base_timeframe}_{start_date}_to_{end_date}.csv"
+            / (
+                f"{symbol}_{self.config.system.market.base_timeframe}_{history_path_label(start_date)}"
+                f"_to_{history_path_label(end_date)}.csv"
+            )
         )
         if history_path.exists():
             df_1m = self.downloader.load_from_csv(history_path)
@@ -108,10 +111,17 @@ class ReplayRunner:
         checkpoint_path = (
             output_dir
             / replay_cfg.checkpoint_dir
-            / f"{symbol}_{execution_timeframe}_{start_date}_to_{end_date}{replay_cfg.checkpoint_suffix}"
+            / (
+                f"{symbol}_{execution_timeframe}_{history_path_label(start_date)}"
+                f"_to_{history_path_label(end_date)}{replay_cfg.checkpoint_suffix}"
+            )
         )
         checkpoint_store = JsonCheckpointStore(checkpoint_path)
         checkpoint = checkpoint_store.read() if replay_cfg.resume_enabled else None
+        resume_signature = self._resume_signature(symbol=symbol, execution_timeframe=execution_timeframe)
+        if checkpoint and not self._checkpoint_compatible(checkpoint=checkpoint, resume_signature=resume_signature):
+            self._log("Ignoring incompatible replay checkpoint and starting fresh state.", level="warning")
+            checkpoint = None
         resume_index = 0
         if checkpoint and not checkpoint.get("completed", False):
             resume_index = int(checkpoint.get("next_index", 0))
@@ -165,6 +175,7 @@ class ReplayRunner:
                         "next_index": replay_engine.cursor.index,
                         "closed_trades": len(runtime.portfolio_manager.closed_trades),
                         "equity": runtime.portfolio_manager.current_equity,
+                        "resume_signature": resume_signature,
                         "completed": False,
                         "updated_at": datetime.now(timezone.utc).isoformat(),
                     }
@@ -192,6 +203,7 @@ class ReplayRunner:
                 "next_index": replay_engine.cursor.index,
                 "closed_trades": len(runtime.portfolio_manager.closed_trades),
                 "equity": runtime.portfolio_manager.current_equity,
+                "resume_signature": resume_signature,
                 "completed": completed,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -205,3 +217,19 @@ class ReplayRunner:
             current_equity=runtime.portfolio_manager.current_equity,
             checkpoint_path=checkpoint_path,
         )
+
+    def _resume_signature(self, *, symbol: str, execution_timeframe: str) -> dict[str, object]:
+        profile = self.config.strategy.resolve_profile(execution_timeframe)
+        return {
+            "mode": "replay",
+            "symbol": symbol,
+            "execution_timeframe": execution_timeframe,
+            "base_timeframe": self.config.system.market.base_timeframe,
+            "starting_equity": float(self.config.system.account.initial_equity),
+            "profile_name": profile.name,
+            "risk_per_trade": float(self.config.risk.risk.risk_per_trade),
+        }
+
+    def _checkpoint_compatible(self, *, checkpoint: dict[str, object], resume_signature: dict[str, object]) -> bool:
+        checkpoint_signature = checkpoint.get("resume_signature")
+        return isinstance(checkpoint_signature, dict) and checkpoint_signature == resume_signature

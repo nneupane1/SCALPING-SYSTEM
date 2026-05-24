@@ -8,6 +8,7 @@ fully inspectable.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -28,6 +29,35 @@ def _as_bool(value: Any) -> bool:
         if lowered in {"false", "0", "no", "off"}:
             return False
     raise ValueError(f"Cannot coerce value to bool: {value!r}")
+
+
+def _format_history_timestamp(value: datetime) -> str:
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _resolve_history_boundary(value: Any, *, default: str) -> str:
+    raw = default if value is None else str(value).strip()
+    if not raw:
+        raw = default
+    token = raw.lower().replace("-", "_").replace(" ", "_")
+    today_midnight_utc = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    if token in {"yesterday_midnight", "utc_yesterday_midnight"}:
+        return _format_history_timestamp(today_midnight_utc - timedelta(days=1))
+    if token in {"today_midnight", "utc_today_midnight"}:
+        return _format_history_timestamp(today_midnight_utc)
+    return raw
+
+
+def history_path_label(value: str) -> str:
+    return str(value).strip().replace(" ", "T").replace(":", ".")
+
+
+def restore_history_path_label(value: str) -> str:
+    raw = str(value).strip()
+    if "T" in raw and "." in raw:
+        date_part, time_part = raw.split("T", 1)
+        return f"{date_part} {time_part.replace('.', ':')}"
+    return raw
 
 
 @dataclass(frozen=True)
@@ -146,14 +176,20 @@ class StorageConfig:
 class HistoryConfig:
     """Configured historical research window."""
 
-    start_date: str = "2024-01-01"
-    end_date: str = "2024-12-31"
+    start_date: str = "2018-01-01 00:00:00"
+    end_date: str = "yesterday_midnight"
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "HistoryConfig":
         return cls(
-            start_date=str(payload.get("start_date", "2024-01-01")),
-            end_date=str(payload.get("end_date", "2024-12-31")),
+            start_date=_resolve_history_boundary(
+                payload.get("start_date"),
+                default="2018-01-01 00:00:00",
+            ),
+            end_date=_resolve_history_boundary(
+                payload.get("end_date"),
+                default="yesterday_midnight",
+            ),
         )
 
 

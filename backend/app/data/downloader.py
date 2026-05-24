@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from backend.app.config.models import ConfigBundle
+from backend.app.config.models import ConfigBundle, history_path_label, restore_history_path_label
 from backend.app.core import JsonCheckpointStore
 
 from .binance_rest import BinanceRestClient
@@ -77,6 +77,29 @@ class MarketDataDownloader:
         return df
 
     @staticmethod
+    def _read_ohlcv_csv(path: Path, *, timestamp_only: bool = False) -> pd.DataFrame:
+        read_kwargs = {
+            "parse_dates": ["timestamp"],
+        }
+        if timestamp_only:
+            read_kwargs["usecols"] = ["timestamp"]
+        else:
+            read_kwargs["usecols"] = ["timestamp", "open", "high", "low", "close", "volume"]
+        try:
+            return pd.read_csv(path, **read_kwargs)
+        except pd.errors.ParserError:
+            columns = ["timestamp", "open", "high", "low", "close", "volume", "_extra"]
+            usecols = [0] if timestamp_only else [0, 1, 2, 3, 4, 5]
+            return pd.read_csv(
+                path,
+                header=0,
+                names=columns,
+                usecols=usecols,
+                parse_dates=["timestamp"],
+                engine="python",
+            )
+
+    @staticmethod
     def klines_to_df(
         raw: list[list[object]],
         *,
@@ -122,7 +145,10 @@ class MarketDataDownloader:
         return MarketDataDownloader._validate_ohlcv(df)
 
     def _history_filename(self, symbol: str, interval: str, start_date: str, end_date: str) -> str:
-        return f"{symbol}_{interval}_{start_date}_to_{end_date}.csv"
+        return (
+            f"{symbol}_{interval}_{history_path_label(start_date)}"
+            f"_to_{history_path_label(end_date)}.csv"
+        )
 
     def _storage_folder(self, symbol: str, interval: str) -> Path:
         return self.config.system.storage.root / symbol / interval
@@ -149,7 +175,7 @@ class MarketDataDownloader:
     def _partial_summary(self, partial_path: Path) -> dict[str, int | None]:
         if not partial_path.exists() or partial_path.stat().st_size == 0:
             return {"rows": 0, "last_timestamp_ms": None}
-        df = pd.read_csv(partial_path, parse_dates=["timestamp"])
+        df = self._read_ohlcv_csv(partial_path)
         if df.empty:
             return {"rows": 0, "last_timestamp_ms": None}
         last_timestamp = pd.Timestamp(df["timestamp"].iloc[-1])
@@ -165,7 +191,7 @@ class MarketDataDownloader:
         batch_df.to_csv(partial_path, mode="a", header=write_header)
 
     def _load_partial(self, partial_path: Path) -> pd.DataFrame:
-        df = pd.read_csv(partial_path, parse_dates=["timestamp"])
+        df = self._read_ohlcv_csv(partial_path)
         df.set_index("timestamp", inplace=True)
         return self._validate_ohlcv(df)
 
@@ -182,14 +208,14 @@ class MarketDataDownloader:
             return None
         target_end_ts = pd.Timestamp(end_date)
         partial_suffix = self.config.system.downloads.history.partial_suffix
-        prefix = f"{symbol}_{interval}_{start_date}_to_"
+        prefix = f"{symbol}_{interval}_{history_path_label(start_date)}_to_"
 
         best_candidate: Path | None = None
         best_end_ts: pd.Timestamp | None = None
         for candidate in folder.glob(f"{prefix}*.csv"):
             if candidate.name.endswith(partial_suffix):
                 continue
-            candidate_end_text = candidate.name[len(prefix):-4]
+            candidate_end_text = restore_history_path_label(candidate.name[len(prefix):-4])
             try:
                 candidate_end_ts = pd.Timestamp(candidate_end_text)
             except ValueError:
@@ -460,7 +486,9 @@ class MarketDataDownloader:
             df = self._load_partial(paths["partial"])
             before_dedupe = len(df)
             df = df[~df.index.duplicated(keep="last")].sort_index()
-            df = df.loc[start_date:end_date]
+            start_bound = pd.Timestamp(start_date)
+            end_bound = pd.Timestamp(end_date)
+            df = df.loc[(df.index >= start_bound) & (df.index < end_bound)]
             duplicates_removed = before_dedupe - len(df)
             df.to_csv(paths["final"])
 
@@ -536,7 +564,7 @@ class MarketDataDownloader:
         start = time.time()
         if not path.exists():
             raise FileNotFoundError(f"CSV file not found: {path}")
-        df = pd.read_csv(path, parse_dates=["timestamp"])
+        df = self._read_ohlcv_csv(path)
         df.set_index("timestamp", inplace=True)
         df = self._validate_ohlcv(df)
         self._emit(
@@ -547,3 +575,40 @@ class MarketDataDownloader:
             },
         )
         return df
+
+    def realtime_runtime_path(self, *, symbol: str, interval: str | None = None) -> Path:
+        base_interval = interval or self.config.system.market.base_timeframe
+        folder = self._storage_folder(symbol.upper(), base_interval)
+        return folder / f"{symbol.upper()}_{base_interval}_live_runtime.csv"
+
+    def append_realtime_history(
+        self,
+        *,
+        symbol: str,
+        frame: pd.DataFrame,
+        interval: str | None = None,
+        last_persisted_at: pd.Timestamp | None = None,
+    ) -> pd.Timestamp | None:
+        if frame.empty:
+            return last_persisted_at
+        path = self.realtime_runtime_path(symbol=symbol, interval=interval)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        append_df = frame.sort_index()
+        required_columns = ["open", "high", "low", "close", "volume"]
+        append_df = append_df.loc[:, [column for column in required_columns if column in append_df.columns]]
+        if last_persisted_at is not None:
+            append_df = append_df.loc[append_df.index > last_persisted_at]
+        if append_df.empty:
+            return last_persisted_at
+        write_header = not path.exists() or path.stat().st_size == 0
+        append_df.to_csv(path, mode="a", header=write_header)
+        return append_df.index.max()
+
+    def latest_timestamp_in_csv(self, path: str | Path) -> pd.Timestamp | None:
+        csv_path = Path(path)
+        if not csv_path.exists() or csv_path.stat().st_size == 0:
+            return None
+        df = self._read_ohlcv_csv(csv_path, timestamp_only=True)
+        if df.empty:
+            return None
+        return pd.Timestamp(df["timestamp"].iloc[-1])

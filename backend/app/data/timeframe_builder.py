@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from backend.app.config.models import ConfigBundle
+from backend.app.config.models import ConfigBundle, history_path_label
 
 
 class TimeframeBuilder:
@@ -17,6 +17,7 @@ class TimeframeBuilder:
         self.config = config
         self.resample_config = config.system.resample
         self.progress_callback = progress_callback
+        self._last_incomplete_signature: tuple[int, str] | None = None
 
     def _emit(self, event_type: str, **payload: object) -> None:
         if callable(self.progress_callback):
@@ -45,11 +46,14 @@ class TimeframeBuilder:
         df_resampled = df_resampled.loc[df_resampled.index <= close_cutoff]
         removed = before - len(df_resampled)
         if removed:
-            self._log(
-                f"Removed {removed} incomplete resampled candle(s); "
-                f"latest usable close: {close_cutoff}",
-                level="warning",
-            )
+            signature = (removed, close_cutoff.isoformat())
+            if signature != self._last_incomplete_signature:
+                self._log(
+                    f"Removed {removed} incomplete resampled candle(s); "
+                    f"latest usable close: {close_cutoff}",
+                    level="warning",
+                )
+                self._last_incomplete_signature = signature
         return df_resampled
 
     def resample(self, df: pd.DataFrame, rule: str) -> pd.DataFrame:
@@ -128,7 +132,10 @@ class TimeframeBuilder:
         for index, (timeframe, frame) in enumerate(frames.items(), start=1):
             folder = root / symbol / timeframe
             folder.mkdir(parents=True, exist_ok=True)
-            path = folder / f"{symbol}_{timeframe}_{start_date}_to_{end_date}.csv"
+            path = (
+                folder
+                / f"{symbol}_{timeframe}_{history_path_label(start_date)}_to_{history_path_label(end_date)}.csv"
+            )
             t0 = time.time()
             frame.to_csv(path)
             self._emit(

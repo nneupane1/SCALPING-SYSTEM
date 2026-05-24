@@ -33,8 +33,8 @@ storage:
   cache_limit: 5000
 
 history:
-  start_date: "2018-01-01"
-  end_date: "2026-05-22"
+  start_date: "2018-01-01 00:00:00"
+  end_date: "yesterday_midnight"
 
 binance:
   base_url: "https://api.binance.com"

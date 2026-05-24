@@ -95,6 +95,10 @@ class StreamingLiveRunner(ForwardRunner):
         )
         checkpoint_store = JsonCheckpointStore(checkpoint_path)
         checkpoint = checkpoint_store.read() if forward_cfg.resume_enabled else None
+        resume_signature = self._resume_signature(symbol=symbol, execution_timeframe=execution_timeframe)
+        if checkpoint and not self._checkpoint_compatible(checkpoint=checkpoint, resume_signature=resume_signature):
+            self._log("Ignoring incompatible live stream checkpoint and starting fresh state.", level="warning")
+            checkpoint = None
         if checkpoint:
             latest_seen = checkpoint.get("latest_execution_close")
             if latest_seen:
@@ -108,12 +112,29 @@ class StreamingLiveRunner(ForwardRunner):
         equity_logger.initialize(resume=resume_logs)
 
         base_df = self._bootstrap_base_history(symbol=symbol, forward_cfg=forward_cfg)
+        runtime_history_path = self.downloader.realtime_runtime_path(
+            symbol=symbol,
+            interval=self.config.system.market.base_timeframe,
+        )
+        last_realtime_persisted_at = self.downloader.latest_timestamp_in_csv(runtime_history_path)
+        last_realtime_persisted_at = self.downloader.append_realtime_history(
+            symbol=symbol,
+            interval=self.config.system.market.base_timeframe,
+            frame=base_df,
+            last_persisted_at=last_realtime_persisted_at,
+        )
         try:
             recent_df = self.downloader.fetch_recent(
                 symbol=symbol,
                 interval=self.config.system.market.base_timeframe,
                 limit=forward_cfg.recent_limit,
                 verbose=False,
+            )
+            last_realtime_persisted_at = self.downloader.append_realtime_history(
+                symbol=symbol,
+                interval=self.config.system.market.base_timeframe,
+                frame=recent_df,
+                last_persisted_at=last_realtime_persisted_at,
             )
             base_df = self._merge_recent_history(
                 base_df=base_df,
@@ -187,10 +208,17 @@ class StreamingLiveRunner(ForwardRunner):
                     },
                 )
 
+                event_frame = event.to_frame()
                 base_df = self._merge_recent_history(
                     base_df=base_df,
-                    recent_df=event.to_frame(),
+                    recent_df=event_frame,
                     warmup_limit=forward_cfg.warmup_base_candles,
+                )
+                last_realtime_persisted_at = self.downloader.append_realtime_history(
+                    symbol=symbol,
+                    interval=self.config.system.market.base_timeframe,
+                    frame=event_frame,
+                    last_persisted_at=last_realtime_persisted_at,
                 )
                 frames = self.timeframe_builder.build_timeframes(base_df)
                 candles_by_timeframe = {
@@ -213,6 +241,7 @@ class StreamingLiveRunner(ForwardRunner):
                             runtime=runtime,
                             polls_processed=events_processed,
                             snapshots_processed=snapshots_processed,
+                            resume_signature=resume_signature,
                             completed=False,
                         )
                     continue
@@ -261,6 +290,7 @@ class StreamingLiveRunner(ForwardRunner):
                         runtime=runtime,
                         polls_processed=events_processed,
                         snapshots_processed=snapshots_processed,
+                        resume_signature=resume_signature,
                         completed=False,
                     )
         finally:
@@ -275,6 +305,7 @@ class StreamingLiveRunner(ForwardRunner):
                 runtime=runtime,
                 polls_processed=events_processed,
                 snapshots_processed=snapshots_processed,
+                resume_signature=resume_signature,
                 completed=False,
             )
 
