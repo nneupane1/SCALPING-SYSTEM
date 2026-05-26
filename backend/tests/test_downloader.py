@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pandas as pd
@@ -11,6 +12,35 @@ from backend.app.data.downloader import MarketDataDownloader
 
 
 class DownloaderTests(unittest.TestCase):
+    def _config_for_tempdir(self, tmpdir: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            system=SimpleNamespace(
+                storage=SimpleNamespace(root=Path(tmpdir)),
+                market=SimpleNamespace(symbol="BTCUSDT", base_timeframe="1m"),
+                history=SimpleNamespace(
+                    start_date="2018-01-01 00:00:00",
+                    end_date="2026-05-23 00:00:00",
+                ),
+                downloads=SimpleNamespace(
+                    history=SimpleNamespace(
+                        checkpoint_dir="_checkpoints",
+                        checkpoint_suffix=".checkpoint.json",
+                        partial_suffix=".partial.csv",
+                        resume_enabled=True,
+                        cleanup_partial_on_complete=True,
+                        save_every_batches=10,
+                        status_every_batches=10,
+                    )
+                ),
+                binance=SimpleNamespace(
+                    historical_limit=1000,
+                    closed_klines_only=True,
+                    throttle_seconds=0,
+                    default_interval="1m",
+                ),
+            )
+        )
+
     def test_klines_to_df_filters_still_forming_candles(self) -> None:
         raw = [
             [1704067200000, "100", "101", "99", "100.5", "12", 1704067259999, "0", "0", "0", "0", "0"],
@@ -118,6 +148,57 @@ class DownloaderTests(unittest.TestCase):
 
         self.assertEqual(3, len(repaired))
         self.assertIn(pd.Timestamp("2024-01-01 00:01:00"), repaired.index)
+
+    def test_fetch_full_history_reuses_covering_completed_csv_without_redownloading(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._config_for_tempdir(tmpdir)
+            client = Mock()
+            downloader = MarketDataDownloader(config=config, client=client, progress_callback=None)
+            client.describe_verify_mode.return_value = "enabled"
+
+            folder = Path(tmpdir) / "BTCUSDT" / "1m"
+            folder.mkdir(parents=True, exist_ok=True)
+            source_path = folder / "BTCUSDT_1m_2018-01-01T00.00.00_to_2026-05-23T00.00.00.csv"
+            index = pd.to_datetime(
+                [
+                    "2020-10-15 02:59:00",
+                    "2020-10-15 03:00:00",
+                    "2020-10-15 03:01:00",
+                    "2026-05-22 23:59:00",
+                ]
+            )
+            source_df = pd.DataFrame(
+                {
+                    "open": [1.0, 2.0, 3.0, 4.0],
+                    "high": [1.1, 2.1, 3.1, 4.1],
+                    "low": [0.9, 1.9, 2.9, 3.9],
+                    "close": [1.05, 2.05, 3.05, 4.05],
+                    "volume": [10.0, 20.0, 30.0, 40.0],
+                },
+                index=index,
+            )
+            source_df.to_csv(source_path, index_label="timestamp")
+
+            df = downloader.fetch_full_history(
+                symbol="BTCUSDT",
+                interval="1m",
+                start_date="2020-10-15 03:00:00",
+                end_date="2026-05-23 00:00:00",
+            )
+
+            expected_path = folder / "BTCUSDT_1m_2020-10-15T03.00.00_to_2026-05-23T00.00.00.csv"
+            expected_checkpoint = (
+                folder
+                / "_checkpoints"
+                / "BTCUSDT_1m_2020-10-15T03.00.00_to_2026-05-23T00.00.00.csv.checkpoint.json"
+            )
+            self.assertTrue(expected_path.exists())
+            self.assertTrue(expected_checkpoint.exists())
+            self.assertEqual(
+                [pd.Timestamp("2020-10-15 03:00:00"), pd.Timestamp("2020-10-15 03:01:00"), pd.Timestamp("2026-05-22 23:59:00")],
+                list(df.index),
+            )
+            client.get_klines.assert_not_called()
 
 
 if __name__ == "__main__":

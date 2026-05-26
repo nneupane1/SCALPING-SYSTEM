@@ -371,6 +371,127 @@ class MarketDataDownloader:
                 best_end_ts = candidate_end_ts
         return best_candidate
 
+    def _parse_history_range_from_filename(
+        self,
+        *,
+        symbol: str,
+        interval: str,
+        filename: str,
+    ) -> tuple[pd.Timestamp, pd.Timestamp] | None:
+        prefix = f"{symbol}_{interval}_"
+        if not filename.startswith(prefix) or not filename.endswith(".csv"):
+            return None
+        stem = filename[:-4]
+        range_text = stem[len(prefix):]
+        if "_to_" not in range_text:
+            return None
+        start_text, end_text = range_text.split("_to_", 1)
+        try:
+            start_ts = pd.Timestamp(restore_history_path_label(start_text))
+            end_ts = pd.Timestamp(restore_history_path_label(end_text))
+        except ValueError:
+            return None
+        return start_ts, end_ts
+
+    def _find_covering_completed_history(
+        self,
+        *,
+        symbol: str,
+        interval: str,
+        start_date: str,
+        end_date: str,
+    ) -> Path | None:
+        folder = self._storage_folder(symbol, interval)
+        if not folder.exists():
+            return None
+
+        target_start_ts = pd.Timestamp(start_date)
+        target_end_ts = pd.Timestamp(end_date)
+        partial_suffix = self.config.system.downloads.history.partial_suffix
+
+        best_candidate: Path | None = None
+        best_span_seconds: float | None = None
+        best_distance_seconds: float | None = None
+        for candidate in folder.glob(f"{symbol}_{interval}_*.csv"):
+            if candidate.name.endswith(partial_suffix):
+                continue
+            history_range = self._parse_history_range_from_filename(
+                symbol=symbol,
+                interval=interval,
+                filename=candidate.name,
+            )
+            if history_range is None:
+                continue
+            candidate_start_ts, candidate_end_ts = history_range
+            if candidate_start_ts > target_start_ts or candidate_end_ts < target_end_ts:
+                continue
+            candidate_span_seconds = (candidate_end_ts - candidate_start_ts).total_seconds()
+            candidate_distance_seconds = (
+                abs((target_start_ts - candidate_start_ts).total_seconds())
+                + abs((candidate_end_ts - target_end_ts).total_seconds())
+            )
+            if (
+                best_candidate is None
+                or best_span_seconds is None
+                or candidate_span_seconds < best_span_seconds
+                or (
+                    candidate_span_seconds == best_span_seconds
+                    and (
+                        best_distance_seconds is None
+                        or candidate_distance_seconds < best_distance_seconds
+                    )
+                )
+            ):
+                best_candidate = candidate
+                best_span_seconds = candidate_span_seconds
+                best_distance_seconds = candidate_distance_seconds
+        return best_candidate
+
+    def _materialize_exact_history_from_source(
+        self,
+        *,
+        source_path: Path,
+        paths: dict[str, Path],
+        symbol: str,
+        interval: str,
+        start_date: str,
+        end_date: str,
+    ) -> pd.DataFrame:
+        self._emit(
+            "phase",
+            status="cached",
+            phase="reusing broader historical file",
+            detail=str(source_path),
+        )
+        df = self.load_from_csv(source_path)
+        start_bound = pd.Timestamp(start_date)
+        end_bound = pd.Timestamp(end_date)
+        df = df.loc[(df.index >= start_bound) & (df.index < end_bound)]
+        df.to_csv(paths["final"])
+        JsonCheckpointStore(paths["checkpoint"]).write(
+            {
+                "symbol": symbol,
+                "interval": interval,
+                "start_date": start_date,
+                "end_date": end_date,
+                "next_start_ms": self._to_utc_ms(end_date),
+                "next_start_time": _fmt(self._to_utc_ms(end_date)),
+                "rows_downloaded": len(df),
+                "partial_csv": str(paths["partial"]),
+                "final_csv": str(paths["final"]),
+                "completed": True,
+                "reused_from": str(source_path),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        if paths["partial"].exists():
+            paths["partial"].unlink()
+        self._log(
+            f"Reused broader historical file {source_path.name} and materialized exact range locally.",
+            level="success",
+        )
+        return df
+
     def _bootstrap_partial_from_completed_history(
         self,
         paths: dict[str, Path],
@@ -442,6 +563,23 @@ class MarketDataDownloader:
             )
             self._log("Completed historical file already exists.", level="success")
             return self.load_from_csv(paths["final"])
+
+        if download_cfg.resume_enabled:
+            covering_source = self._find_covering_completed_history(
+                symbol=symbol,
+                interval=interval,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if covering_source is not None:
+                return self._materialize_exact_history_from_source(
+                    source_path=covering_source,
+                    paths=paths,
+                    symbol=symbol,
+                    interval=interval,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
 
         bootstrap_source = None
         if download_cfg.resume_enabled:
