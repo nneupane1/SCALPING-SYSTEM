@@ -2,8 +2,8 @@ export type BacktestStatus = "idle" | "running" | "paused" | "completed";
 
 export type BacktestProgress = {
   nextIndex: number;
-  totalRows: number;
-  chartRows: number;
+  totalClockRows: number;
+  focusExecutionRows: number;
   progressPct: number;
   simulatedTime: string | null;
   checkpointUpdatedAt: string | null;
@@ -89,6 +89,9 @@ export type SymbolPerformanceStat = {
   totalR: number;
   realizedPnl: number;
   latestTradeAt: string | null;
+  factorBucket: string;
+  recommendation: "keep" | "watch" | "prune";
+  rationale: string;
 };
 
 export type BacktestSummaryView = {
@@ -97,6 +100,8 @@ export type BacktestSummaryView = {
   symbols: string[];
   activeSymbol: string;
   executionTimeframe: string;
+  clockTimeframe: string;
+  triggerTimeframe: string;
   startDate: string | null;
   endDate: string | null;
   startingEquity: number;
@@ -114,6 +119,8 @@ export type BacktestSummaryView = {
   sessionBreakdown: BreakdownStat[];
   qualityBreakdown: BreakdownStat[];
   stateBreakdown: BreakdownStat[];
+  recommendedUniverse: string[];
+  selectionPolicy: string;
 };
 
 export type BacktestSnapshot = {

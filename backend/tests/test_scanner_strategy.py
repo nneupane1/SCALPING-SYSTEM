@@ -253,7 +253,7 @@ class ScannerAndStrategyTests(unittest.TestCase):
         self.assertEqual("B", signal.metadata["setup_execution_band"])
         self.assertLessEqual(signal.metadata["risk_fraction_multiplier"], 0.88)
 
-    def test_strategy_uses_1m_trigger_inside_current_5m_bar(self) -> None:
+    def test_strategy_does_not_retroactively_mine_1m_trigger_inside_closed_5m_bar(self) -> None:
         execution_candles = (
             make_candle(minute_offset=0, open_price=100.0, high=101.0, low=99.7, close=100.7, volume=10.0, timeframe="5m"),
             make_candle(minute_offset=5, open_price=100.7, high=101.4, low=100.5, close=101.1, volume=10.0, timeframe="5m"),
@@ -318,10 +318,78 @@ class ScannerAndStrategyTests(unittest.TestCase):
         signal = strategy.evaluate(snapshot, decision)
 
         self.assertEqual(ScannerState.READY, decision.state)
+        self.assertIsNone(signal)
+
+    def test_strategy_accepts_current_1m_trigger_after_setup_is_armed(self) -> None:
+        execution_candles = (
+            make_candle(minute_offset=0, open_price=100.0, high=101.0, low=99.7, close=100.7, volume=10.0, timeframe="5m"),
+            make_candle(minute_offset=5, open_price=100.7, high=101.4, low=100.5, close=101.1, volume=10.0, timeframe="5m"),
+            make_candle(minute_offset=10, open_price=101.1, high=106.5, low=100.9, close=106.0, volume=28.0, timeframe="5m"),
+            make_candle(minute_offset=15, open_price=106.0, high=106.1, low=104.8, close=105.2, volume=12.0, timeframe="5m"),
+            make_candle(minute_offset=20, open_price=105.2, high=106.0, low=104.9, close=105.4, volume=24.0, timeframe="5m"),
+        )
+        post_setup_triggers = (
+            make_candle(minute_offset=25, open_price=105.4, high=105.6, low=105.35, close=105.5, volume=4.0, timeframe="1m"),
+            make_candle(minute_offset=26, open_price=105.5, high=105.7, low=105.4, close=105.55, volume=4.0, timeframe="1m"),
+            make_candle(minute_offset=27, open_price=105.55, high=106.8, low=105.5, close=106.4, volume=9.0, timeframe="1m"),
+        )
+        snapshot = MarketSnapshot(
+            symbol="BTCUSDT",
+            generated_at=post_setup_triggers[-1].close_time,
+            candles={"1m": post_setup_triggers, "5m": execution_candles},
+        )
+        scanner = MomentumScanner(
+            scanner_config=ScannerConfig(
+                min_impulse_body_ratio=1.5,
+                min_volume_ratio=1.2,
+                max_pullback_depth_ratio=0.8,
+                max_pullback_body_ratio=0.75,
+                min_pullback_bars=1,
+                max_pullback_bars=1,
+                compression_lookback=2,
+            ),
+            execution_timeframe="5m",
+        )
+        strategy = PullbackScalpStrategy(
+            strategy_config=StrategyRuleConfig(name="pullback_scalp", allow_long=True, allow_short=True),
+            filter_config=StrategyFilterConfig.from_mapping(
+                {
+                    "context": {"enabled": False},
+                    "market_state": {"enabled": False},
+                    "quality": {"enabled": False},
+                    "session": {"enabled": False},
+                }
+            ),
+            trigger_config=StrategyTriggerConfig(
+                timeframe="1m",
+                require_breakout_close=True,
+                reference_lookback_bars=2,
+                min_close_position=0.55,
+                min_body_ratio=1.0,
+                max_body_ratio=8.0,
+                max_breakout_extension_ratio=0.55,
+                stop_buffer_ratio=0.04,
+            ),
+            execution_timeframe="5m",
+        )
+
+        armed_snapshot = MarketSnapshot(
+            symbol="BTCUSDT",
+            generated_at=execution_candles[-1].close_time,
+            candles={"5m": execution_candles},
+        )
+        decision = scanner.scan(armed_snapshot)
+        signal = strategy.evaluate(
+            snapshot,
+            decision,
+            current_trigger_candle=post_setup_triggers[-1],
+        )
+
+        self.assertEqual(ScannerState.READY, decision.state)
         self.assertIsNotNone(signal)
         assert signal is not None
         self.assertEqual("1m", signal.metadata["trigger_timeframe"])
-        self.assertEqual(trigger_candles[3].close_time, signal.generated_at)
+        self.assertEqual(post_setup_triggers[-1].close_time, signal.generated_at)
         self.assertGreater(signal.entry_price, float(decision.trigger_level))
         self.assertEqual("1m", signal.metadata["trigger_candle_timeframe"])
 

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime
 
 from backend.app.portfolio.portfolio_manager import PortfolioManager
+from backend.app.data.resampler import timeframe_to_timedelta
 
 from .events import Event, EventTopic
 from .models import (
@@ -39,12 +41,22 @@ class SignalEvaluationResult:
     portfolio: PortfolioSnapshot
 
 
+@dataclass(frozen=True)
+class ArmedScannerSetup:
+    """A scanner decision that stays active for lower-timeframe trigger checks."""
+
+    decision: ScannerDecision
+    execution_close: datetime
+
+
 class TradingEngine:
     """Thin orchestrator that delegates decisions to specialized modules."""
 
     def __init__(
         self,
         execution_timeframe: str,
+        trigger_timeframe: str,
+        clock_timeframe: str,
         scanner,
         strategy,
         risk_manager,
@@ -55,6 +67,8 @@ class TradingEngine:
         session_timezone: str,
     ) -> None:
         self.execution_timeframe = execution_timeframe
+        self.trigger_timeframe = trigger_timeframe
+        self.clock_timeframe = clock_timeframe
         self.scanner = scanner
         self.strategy = strategy
         self.risk_manager = risk_manager
@@ -63,6 +77,11 @@ class TradingEngine:
         self.portfolio_manager = portfolio_manager
         self.event_bus = event_bus
         self.session_timezone = session_timezone
+        self._lower_timeframe_trigger = (
+            timeframe_to_timedelta(self.trigger_timeframe) < timeframe_to_timedelta(self.execution_timeframe)
+        )
+        self._armed_setups_by_symbol: dict[str, ArmedScannerSetup] = {}
+        self._last_managed_execution_close_by_symbol: dict[str, datetime] = {}
 
     def process_snapshot(self, snapshot: MarketSnapshot, *, allow_new_entries: bool = True) -> EngineCycleResult:
         """Run one full market-state evaluation pass."""
@@ -89,7 +108,13 @@ class TradingEngine:
     def manage_snapshot(self, snapshot: MarketSnapshot) -> tuple[ManagementDecision, ...]:
         latest_candle = snapshot.latest(self.execution_timeframe)
         active_position = self.portfolio_manager.position_for_symbol(snapshot.symbol)
-        if active_position is None or latest_candle is None:
+        if latest_candle is None:
+            return ()
+        if active_position is None:
+            self._last_managed_execution_close_by_symbol[snapshot.symbol] = latest_candle.close_time
+            return ()
+        previous_managed_close = self._last_managed_execution_close_by_symbol.get(snapshot.symbol)
+        if previous_managed_close is not None and latest_candle.close_time <= previous_managed_close:
             return ()
         management_decisions = self.trailing_engine.evaluate(
             position=active_position,
@@ -104,6 +129,7 @@ class TradingEngine:
             if closed_trade is not None:
                 self.portfolio_manager.close_position(closed_trade)
         self.portfolio_manager.sync_active_position(active_position)
+        self._last_managed_execution_close_by_symbol[snapshot.symbol] = latest_candle.close_time
         return management_decisions
 
     def evaluate_entry_candidate(
@@ -115,27 +141,35 @@ class TradingEngine:
         scanner_decision: ScannerDecision | None = None
         signal: TradeSignal | None = None
         latest_candle = snapshot.latest(self.execution_timeframe)
-        if (
+        execution_boundary = (
             latest_candle is not None
-            and allow_new_entries
-            and self.portfolio_manager.position_for_symbol(snapshot.symbol) is None
-        ):
+            and latest_candle.close_time == snapshot.generated_at
+        )
+        no_active_position = self.portfolio_manager.position_for_symbol(snapshot.symbol) is None
+        if self._lower_timeframe_trigger:
+            signal = self._evaluate_armed_trigger(
+                snapshot=snapshot,
+                latest_execution_candle=latest_candle,
+                allow_new_entries=allow_new_entries,
+                no_active_position=no_active_position,
+            )
+            if execution_boundary and latest_candle is not None:
+                scanner_decision = self.scanner.scan(snapshot)
+                self.event_bus.publish(Event(EventTopic.SCANNER_UPDATED, scanner_decision))
+                if allow_new_entries and no_active_position and scanner_decision.is_tradeable:
+                    self._armed_setups_by_symbol[snapshot.symbol] = ArmedScannerSetup(
+                        decision=scanner_decision,
+                        execution_close=latest_candle.close_time,
+                    )
+                else:
+                    self._armed_setups_by_symbol.pop(snapshot.symbol, None)
+        elif latest_candle is not None and execution_boundary and allow_new_entries and no_active_position:
             scanner_decision = self.scanner.scan(snapshot)
             self.event_bus.publish(Event(EventTopic.SCANNER_UPDATED, scanner_decision))
             if scanner_decision.is_tradeable:
                 signal = self.strategy.evaluate(snapshot, scanner_decision)
                 if signal is None:
-                    rejection_reason = getattr(self.strategy, "last_rejection_reason", None)
-                    if rejection_reason:
-                        self.event_bus.publish(
-                            Event(
-                                EventTopic.HEALTH,
-                                {
-                                    "stage": "strategy_block",
-                                    "message": rejection_reason,
-                                },
-                            )
-                        )
+                    self._publish_strategy_rejection()
                 if signal is not None:
                     signal = self._apply_day_feedback(signal=signal, occurred_at=latest_candle.close_time)
         portfolio = self.portfolio_manager.snapshot()
@@ -180,6 +214,10 @@ class TradingEngine:
             )
             return None
         self.portfolio_manager.open_position(position)
+        execution_close_raw = signal.metadata.get("execution_close")
+        if isinstance(execution_close_raw, str):
+            self._last_managed_execution_close_by_symbol[signal.symbol] = datetime.fromisoformat(execution_close_raw)
+        self._armed_setups_by_symbol.pop(signal.symbol, None)
         self.event_bus.publish(Event(EventTopic.SIGNAL_EMITTED, signal))
         self.event_bus.publish(Event(EventTopic.ORDER_SUBMITTED, position))
         return resolved_risk_plan
@@ -243,3 +281,45 @@ class TradingEngine:
         elif feedback_reason == "bad_day":
             reasons = reasons + ("session is behaving poorly; risk scaled down",)
         return replace(signal, metadata=metadata, reasons=reasons)
+
+    def _evaluate_armed_trigger(
+        self,
+        *,
+        snapshot: MarketSnapshot,
+        latest_execution_candle,
+        allow_new_entries: bool,
+        no_active_position: bool,
+    ) -> TradeSignal | None:
+        if not allow_new_entries or not no_active_position:
+            return None
+        armed_setup = self._armed_setups_by_symbol.get(snapshot.symbol)
+        if armed_setup is None:
+            return None
+        trigger_candle = snapshot.latest(self.trigger_timeframe)
+        if trigger_candle is None or trigger_candle.close_time != snapshot.generated_at:
+            return None
+        if trigger_candle.close_time <= armed_setup.execution_close:
+            return None
+        signal = self.strategy.evaluate(
+            snapshot,
+            armed_setup.decision,
+            current_trigger_candle=trigger_candle,
+        )
+        if signal is None:
+            self._publish_strategy_rejection()
+            return None
+        occurred_at = trigger_candle.close_time if latest_execution_candle is None else trigger_candle.close_time
+        return self._apply_day_feedback(signal=signal, occurred_at=occurred_at)
+
+    def _publish_strategy_rejection(self) -> None:
+        rejection_reason = getattr(self.strategy, "last_rejection_reason", None)
+        if rejection_reason:
+            self.event_bus.publish(
+                Event(
+                    EventTopic.HEALTH,
+                    {
+                        "stage": "strategy_block",
+                        "message": rejection_reason,
+                    },
+                )
+            )

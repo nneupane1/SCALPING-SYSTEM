@@ -672,6 +672,190 @@ a {
   gap: 16px;
 }
 
+.homeHeroQuant {
+  grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);
+  align-items: stretch;
+  min-height: 560px;
+}
+
+.homeHeroLeadQuant {
+  justify-content: space-between;
+}
+
+.homeHeroHeadline {
+  display: grid;
+  gap: 14px;
+}
+
+.homeHeroQuant .homeHeroCopy {
+  max-width: 42ch;
+  font-size: 1.02rem;
+}
+
+.homeMetricStrip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.homeMetricChip {
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(110, 149, 188, 0.12);
+  background: rgba(7, 13, 20, 0.72);
+}
+
+.homeMetricChip span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.homeMetricChip strong {
+  font-size: 0.98rem;
+}
+
+.homeVisualCard {
+  position: relative;
+  min-height: 100%;
+}
+
+.homeVisualFrame {
+  position: relative;
+  min-height: 100%;
+  border-radius: 24px;
+  overflow: hidden;
+  border: 1px solid rgba(110, 149, 188, 0.18);
+  background: rgba(4, 10, 15, 0.9);
+  box-shadow:
+    0 30px 90px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.homeVisualFrame::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(6, 12, 18, 0.02), rgba(6, 12, 18, 0.58)),
+    linear-gradient(90deg, rgba(6, 12, 18, 0.4), transparent 42%, rgba(6, 12, 18, 0.12));
+  pointer-events: none;
+}
+
+.homeVisualImage {
+  object-fit: cover;
+}
+
+.homeVisualOverlay {
+  position: absolute;
+  inset: auto 18px 18px 18px;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.homeVisualBadge {
+  min-width: 180px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(110, 149, 188, 0.16);
+  background: rgba(6, 13, 20, 0.74);
+  backdrop-filter: blur(16px);
+}
+
+.homeVisualBadge span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.homeVisualBadge strong {
+  font-size: 0.98rem;
+}
+
+.homeCommandBand {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
+  gap: 16px;
+}
+
+.homeCompactPanel {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(110, 149, 188, 0.14);
+  background:
+    linear-gradient(180deg, rgba(10, 18, 28, 0.94), rgba(7, 13, 20, 0.9)),
+    rgba(7, 13, 20, 0.9);
+}
+
+.homeCompactHeader {
+  display: grid;
+  gap: 4px;
+}
+
+.homeCompactHeader strong {
+  font-family: "Bahnschrift", "Aptos", "Segoe UI", sans-serif;
+  font-size: 1.1rem;
+}
+
+.homeCompactList {
+  display: grid;
+  gap: 10px;
+}
+
+.homeCommandRowCompact {
+  padding: 10px 12px;
+}
+
+.homeFlowRail {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.homeFlowStep {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(110, 149, 188, 0.12);
+  background: rgba(6, 12, 18, 0.68);
+}
+
+.homeFlowStep span {
+  color: #ffd080;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.homeFlowStep strong {
+  line-height: 1.4;
+}
+
+.homeRouteGridCompact {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.homeRouteCardQuant {
+  min-height: 208px;
+  align-content: space-between;
+}
+
+.homeRouteCardQuant p {
+  max-width: 30ch;
+}
+
 .homeStatementList,
 .homeSignalGrid {
   display: grid;
@@ -710,12 +894,24 @@ a {
   .homeRouteGrid,
   .homeLowerGrid,
   .homeSignalGrid,
-  .homeCommandFooter {
+  .homeCommandFooter,
+  .homeMetricStrip,
+  .homeCommandBand,
+  .homeFlowRail,
+  .homeRouteGridCompact {
     grid-template-columns: 1fr;
   }
 
   .homeHero {
     padding: 22px;
+  }
+
+  .homeHeroQuant {
+    min-height: auto;
+  }
+
+  .homeVisualFrame {
+    min-height: 320px;
   }
 }
 
@@ -771,6 +967,21 @@ a {
   border-radius: inherit;
 }
 
+.btHero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(90deg, rgba(6, 12, 18, 0.84) 0%, rgba(6, 12, 18, 0.58) 46%, rgba(6, 12, 18, 0.8) 100%),
+    url("/brand/quantfund-ai-hero.png");
+  background-size: cover;
+  background-position: center;
+  opacity: 0.28;
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+
 .btHeroCopy {
   display: grid;
   gap: 14px;
@@ -796,7 +1007,7 @@ a {
 
 .btHero p {
   margin: 0;
-  max-width: 62ch;
+  max-width: 42ch;
   color: #bdd3e7;
   line-height: 1.6;
 }
@@ -809,12 +1020,24 @@ a {
 
 .btHeroMeta {
   display: grid;
-  gap: 14px;
+  gap: 12px;
   padding: 16px;
   border-radius: 20px;
   border: 1px solid rgba(122, 160, 196, 0.18);
   background: rgba(4, 11, 18, 0.72);
   align-content: start;
+}
+
+.btHeroStatRack {
+  display: grid;
+  gap: 10px;
+}
+
+.btHeroStat {
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(108, 144, 180, 0.12);
+  background: rgba(7, 14, 21, 0.68);
 }
 
 .btHeroMetaLine {
@@ -1014,7 +1237,8 @@ a {
 .btPanelHeader p {
   margin: 4px 0 0;
   color: var(--muted);
-  line-height: 1.5;
+  line-height: 1.45;
+  font-size: 0.92rem;
 }
 
 .btBadge {
@@ -1136,18 +1360,30 @@ a {
 }
 
 .btAnomalyList {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 14px;
 }
 
 .btAnomalyRow {
-  padding: 12px 14px;
-  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 10px 12px;
+  border-radius: 999px;
   border: 1px solid rgba(255, 190, 87, 0.18);
   background: rgba(58, 34, 9, 0.32);
   color: #ffe0af;
-  line-height: 1.5;
+  line-height: 1.35;
+  font-size: 12px;
+  max-width: 100%;
+}
+
+.btAnomalyRow-muted {
+  border-color: rgba(108, 144, 180, 0.16);
+  background: rgba(8, 15, 23, 0.7);
+  color: #b7cadb;
 }
 
 .btBreakdownList,
@@ -1345,6 +1581,7 @@ a {
 .researchDock {
   display: grid;
   gap: 16px;
+  padding: 16px;
 }
 
 .researchGrid {
@@ -1398,6 +1635,7 @@ a {
 .researchMetaCard strong {
   display: block;
   margin-top: 6px;
+  line-height: 1.35;
 }
 
 .researchActionRow,
@@ -1456,8 +1694,8 @@ a {
   gap: 12px;
   flex-wrap: wrap;
   color: var(--muted);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .researchFooter strong {
@@ -1550,8 +1788,8 @@ a {
 
 .btSymbolCard {
   display: grid;
-  gap: 12px;
-  padding: 16px;
+  gap: 10px;
+  padding: 15px;
   text-align: left;
   border-radius: 18px;
   border: 1px solid rgba(108, 144, 180, 0.14);
@@ -1612,6 +1850,41 @@ a {
   font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.btMiniTag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(108, 144, 180, 0.16);
+  background: rgba(6, 13, 20, 0.78);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.btMiniTag-keep {
+  border-color: rgba(45, 212, 191, 0.2);
+  color: #91f0dd;
+}
+
+.btMiniTag-watch {
+  border-color: rgba(255, 191, 99, 0.24);
+  color: #ffd69b;
+}
+
+.btMiniTag-prune {
+  border-color: rgba(251, 113, 133, 0.22);
+  color: #ffb7c4;
+}
+
+.btSymbolHint {
+  color: #b6cadc;
+  font-size: 12px;
+  line-height: 1.45;
+  padding-top: 2px;
 }
 
 @media (max-width: 1280px) {

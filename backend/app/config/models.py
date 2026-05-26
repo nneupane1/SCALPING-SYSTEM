@@ -60,6 +60,16 @@ def restore_history_path_label(value: str) -> str:
     return raw
 
 
+def _timeframe_to_timedelta(timeframe: str) -> timedelta:
+    magnitude = int(timeframe[:-1])
+    unit = timeframe[-1].lower()
+    if unit == "m":
+        return timedelta(minutes=magnitude)
+    if unit == "h":
+        return timedelta(hours=magnitude)
+    raise ValueError(f"Unsupported timeframe: {timeframe}")
+
+
 @dataclass(frozen=True)
 class SessionWindow:
     """A time-of-day window during which the system is allowed to trade."""
@@ -764,6 +774,13 @@ class TimeframeProfileConfig:
         if configured in {"", "execution"}:
             return self.execution_timeframe
         return self.trigger.timeframe
+
+    @property
+    def clock_timeframe(self) -> str:
+        trigger_timeframe = self.trigger_timeframe
+        if _timeframe_to_timedelta(trigger_timeframe) < _timeframe_to_timedelta(self.execution_timeframe):
+            return trigger_timeframe
+        return self.execution_timeframe
 
     @classmethod
     def from_mapping(

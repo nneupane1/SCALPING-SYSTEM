@@ -12,9 +12,12 @@ market:
   watchlist_symbols:
     - BTCUSDT
     - ETHUSDT
-    - SOLUSDT
     - BNBUSDT
-    - AVAXUSDT
+    - SOLUSDT
+    - LINKUSDT
+    - XRPUSDT
+    - AAVEUSDT
+    - TRXUSDT
   base_timeframe: 1m
   execution_timeframe: 5m
   context_timeframes:

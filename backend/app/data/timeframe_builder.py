@@ -117,11 +117,20 @@ class TimeframeBuilder:
 
     def build_timeframes(self, df_1m: pd.DataFrame) -> dict[str, pd.DataFrame]:
         market = self.config.system.market
+        active_profile = self.config.strategy.resolve_profile(market.execution_timeframe)
+        filter_timeframes = []
+        if self.config.strategy.filters.context.enabled:
+            filter_timeframes.append(self.config.strategy.filters.context.timeframe)
+        if self.config.strategy.filters.market_state.enabled:
+            filter_timeframes.append(self.config.strategy.filters.market_state.timeframe)
         derived = {
             timeframe
             for timeframe in (
                 market.execution_timeframe,
                 *market.context_timeframes,
+                active_profile.trigger_timeframe,
+                active_profile.clock_timeframe,
+                *filter_timeframes,
             )
             if timeframe != market.base_timeframe
         }

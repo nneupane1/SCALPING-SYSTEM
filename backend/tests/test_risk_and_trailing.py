@@ -87,6 +87,33 @@ class RiskAndTrailingTests(unittest.TestCase):
         self.assertAlmostEqual(75.0, plan.risk_amount)
         self.assertAlmostEqual(25.0, plan.position_size)
 
+    def test_risk_manager_uses_actual_deployed_risk_after_notional_cap(self) -> None:
+        signal = TradeSignal(
+            strategy_name="pullback_scalp",
+            symbol="BTCUSDT",
+            timeframe="5m",
+            side=Side.LONG,
+            generated_at=make_candle(
+                minute_offset=0,
+                open_price=100.0,
+                high=101.0,
+                low=99.0,
+                close=100.5,
+                volume=10.0,
+            ).close_time,
+            entry_price=10_000.0,
+            stop_price=9_995.0,
+            first_target_price=10_005.0,
+            confidence=0.7,
+            reasons=("test",),
+        )
+
+        plan = RiskManager(self.config).build_plan(signal=signal, equity=20_000.0)
+
+        self.assertAlmostEqual(5.0, plan.position_size)
+        self.assertAlmostEqual(25.0, plan.risk_amount)
+        self.assertAlmostEqual(0.00125, plan.risk_fraction)
+
     def test_trailing_engine_takes_partial_then_moves_to_breakeven(self) -> None:
         trailing = TrailingEngine(self.config)
         position = OpenPosition(

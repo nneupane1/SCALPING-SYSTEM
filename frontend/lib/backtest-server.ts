@@ -40,6 +40,65 @@ type FileCacheEntry<T> = {
 const repoRootCache: { root?: string } = {};
 const csvCache = new Map<string, FileCacheEntry<CsvRow[]>>();
 const countCache = new Map<string, FileCacheEntry<number>>();
+const RECOMMENDED_UNIVERSE = [
+  "BTCUSDT",
+  "ETHUSDT",
+  "BNBUSDT",
+  "SOLUSDT",
+  "LINKUSDT",
+  "XRPUSDT",
+  "AAVEUSDT",
+  "TRXUSDT",
+] as const;
+
+function factorBucketForSymbol(symbol: string): string {
+  const normalized = symbol.toUpperCase();
+  if (normalized === "BTCUSDT") return "core_beta";
+  if (normalized === "ETHUSDT") return "smart_contract_core";
+  if (normalized === "BNBUSDT") return "exchange_chain";
+  if (normalized === "SOLUSDT") return "high_beta_l1";
+  if (normalized === "AVAXUSDT") return "overlap_l1";
+  if (normalized === "LINKUSDT") return "oracle_infra";
+  if (normalized === "XRPUSDT") return "payments";
+  if (normalized === "TRXUSDT") return "payments_alt";
+  if (normalized === "AAVEUSDT") return "defi_lending";
+  if (normalized === "UNIUSDT") return "dex_defi";
+  if (normalized === "PAXGUSDT") return "metal_proxy";
+  return "general_crypto";
+}
+
+function classifySymbolPerformance(
+  trades: number,
+  winRate: number,
+  avgR: number,
+  totalR: number,
+): {
+  recommendation: "keep" | "watch" | "prune";
+  rationale: string;
+} {
+  if (trades < 12) {
+    return {
+      recommendation: "watch",
+      rationale: "Sample is still too small to trust. Keep observing before pruning.",
+    };
+  }
+  if (totalR >= 1.0 && avgR > 0 && winRate >= 0.38) {
+    return {
+      recommendation: "keep",
+      rationale: "Positive expectancy with enough sample. Keep it in the ranked universe.",
+    };
+  }
+  if (totalR <= -1.0 && avgR <= 0 && winRate < 0.45) {
+    return {
+      recommendation: "prune",
+      rationale: "Negative contribution with enough sample. Demote it unless recent evidence reverses.",
+    };
+  }
+  return {
+    recommendation: "watch",
+    rationale: "Mixed evidence. Keep it under review and let recent-regime data decide.",
+  };
+}
 
 function resolveRepoRoot(): string {
   if (repoRootCache.root) {
@@ -420,15 +479,23 @@ function buildSymbolBreakdown(trades: BacktestTrade[]): SymbolPerformanceStat[] 
   }
 
   return [...buckets.entries()]
-    .map(([symbol, bucket]) => ({
-      symbol,
-      trades: bucket.trades,
-      winRate: bucket.trades ? bucket.wins / bucket.trades : 0,
-      avgR: bucket.trades ? bucket.totalR / bucket.trades : 0,
-      totalR: bucket.totalR,
-      realizedPnl: bucket.realizedPnl,
-      latestTradeAt: bucket.latestTradeAt,
-    }))
+    .map(([symbol, bucket]) => {
+      const winRate = bucket.trades ? bucket.wins / bucket.trades : 0;
+      const avgR = bucket.trades ? bucket.totalR / bucket.trades : 0;
+      const evidence = classifySymbolPerformance(bucket.trades, winRate, avgR, bucket.totalR);
+      return {
+        symbol,
+        trades: bucket.trades,
+        winRate,
+        avgR,
+        totalR: bucket.totalR,
+        realizedPnl: bucket.realizedPnl,
+        latestTradeAt: bucket.latestTradeAt,
+        factorBucket: factorBucketForSymbol(symbol),
+        recommendation: evidence.recommendation,
+        rationale: evidence.rationale,
+      };
+    })
     .sort((left, right) => {
       if (right.totalR !== left.totalR) {
         return right.totalR - left.totalR;
@@ -513,6 +580,15 @@ function buildSummary(
     trades.length > 0 ? Math.min(...trades.map((trade) => trade.realizedR)) : 0;
   const symbolBreakdown = buildSymbolBreakdown(trades);
   const symbolScope = checkpoint?.symbol ?? symbols.join("__");
+  const resumeSignature = checkpoint?.resume_signature ?? {};
+  const clockTimeframe =
+    typeof resumeSignature.clock_timeframe === "string"
+      ? resumeSignature.clock_timeframe
+      : checkpoint?.execution_timeframe ?? "5m";
+  const triggerTimeframe =
+    typeof resumeSignature.trigger_timeframe === "string"
+      ? resumeSignature.trigger_timeframe
+      : checkpoint?.execution_timeframe ?? "5m";
 
   return {
     symbol: symbolScope,
@@ -520,6 +596,8 @@ function buildSummary(
     symbols,
     activeSymbol,
     executionTimeframe: checkpoint?.execution_timeframe ?? "5m",
+    clockTimeframe,
+    triggerTimeframe,
     startDate: checkpoint?.start_date ?? null,
     endDate: checkpoint?.end_date ?? null,
     startingEquity,
@@ -540,6 +618,8 @@ function buildSummary(
       (trade) => trade.setupQualityLabel || "unlabeled quality",
     ),
     stateBreakdown: buildBreakdown(trades, (trade) => trade.marketState || "unknown state"),
+    recommendedUniverse: [...RECOMMENDED_UNIVERSE],
+    selectionPolicy: "scan many, rank by evidence, trade few under shared portfolio risk",
   };
 }
 
@@ -600,28 +680,53 @@ export async function loadBacktestSnapshot(selectedSymbol?: string | null): Prom
   const summary = buildSummary(checkpoint, trades, equityRows, gapWindows, symbols, activeSymbol);
 
   const executionTimeframe = summary.executionTimeframe;
+  const clockTimeframe = summary.clockTimeframe;
   const simulatedTime = equityRows.at(-1)?.time ?? null;
-  const priceFiles = await Promise.all(
+  const symbolFiles = await Promise.all(
     symbols.map(async (symbol) => ({
       symbol,
-      filePath: await findPriceFile(
+      executionFilePath: await findPriceFile(
         repoRoot,
         symbol,
         executionTimeframe,
         summary.startDate,
         summary.endDate,
       ),
+      clockFilePath:
+        clockTimeframe === executionTimeframe
+          ? await findPriceFile(
+              repoRoot,
+              symbol,
+              executionTimeframe,
+              summary.startDate,
+              summary.endDate,
+            )
+          : await findPriceFile(
+              repoRoot,
+              symbol,
+              clockTimeframe,
+              summary.startDate,
+              summary.endDate,
+            ),
     })),
   );
-  const activePriceFile = priceFiles.find((entry) => entry.symbol === activeSymbol)?.filePath ?? null;
-  const counts = await Promise.all(
-    priceFiles.map(async ({ symbol, filePath }) => ({
+  const activePriceFile =
+    symbolFiles.find((entry) => entry.symbol === activeSymbol)?.executionFilePath ?? null;
+  const clockCounts = await Promise.all(
+    symbolFiles.map(async ({ symbol, clockFilePath }) => ({
       symbol,
-      rows: filePath ? await countDataRows(filePath) : 0,
+      rows: clockFilePath ? await countDataRows(clockFilePath) : 0,
     })),
   );
-  const totalRows = counts.reduce((sum, entry) => sum + entry.rows, 0);
-  const chartRows = counts.find((entry) => entry.symbol === activeSymbol)?.rows ?? 0;
+  const executionCounts = await Promise.all(
+    symbolFiles.map(async ({ symbol, executionFilePath }) => ({
+      symbol,
+      rows: executionFilePath ? await countDataRows(executionFilePath) : 0,
+    })),
+  );
+  const totalClockRows = clockCounts.reduce((sum, entry) => sum + entry.rows, 0);
+  const focusExecutionRows =
+    executionCounts.find((entry) => entry.symbol === activeSymbol)?.rows ?? 0;
   const candles = await readPriceWindow(activePriceFile, simulatedTime);
   const windowStart = candles.length ? utcMillis(candles[0].time) : 0;
   const windowEnd = candles.length ? utcMillis(candles.at(-1)!.time) : 0;
@@ -631,11 +736,26 @@ export async function loadBacktestSnapshot(selectedSymbol?: string | null): Prom
 
   const anomalies: string[] = [];
   if (!activePriceFile) {
-    anomalies.push(`No resampled execution file found for ${activeSymbol} in the active backtest range.`);
+    anomalies.push(
+      `No resampled execution file found for ${activeSymbol} in the active backtest range.`,
+    );
+  }
+  const missingClockFiles = symbolFiles
+    .filter((entry) => !entry.clockFilePath)
+    .map((entry) => `${entry.symbol}:${clockTimeframe}`);
+  if (missingClockFiles.length > 0) {
+    anomalies.push(
+      `Clock-timeframe history is missing for ${missingClockFiles.join(", ")}. Progress telemetry may be incomplete.`,
+    );
   }
   if (symbols.length > 1) {
     anomalies.push(
       `Watchlist backtest active across ${symbols.length} symbols. Portfolio equity is aggregate; chart focus is ${activeSymbol}.`,
+    );
+  }
+  if (clockTimeframe !== executionTimeframe) {
+    anomalies.push(
+      `Progress now tracks ${clockTimeframe} clock candles while chart structure stays on ${executionTimeframe}. Trigger validation happens on ${summary.triggerTimeframe}.`,
     );
   }
   if (gapWindows.length > 0) {
@@ -646,14 +766,20 @@ export async function loadBacktestSnapshot(selectedSymbol?: string | null): Prom
   if (trades.length === 0) {
     anomalies.push("No closed trades recorded yet in the current output set.");
   }
+  const missingRecommended = RECOMMENDED_UNIVERSE.filter((symbol) => !symbols.includes(symbol));
+  if (missingRecommended.length > 0) {
+    anomalies.push(
+      `Current scope does not include the full diversified research universe. Missing: ${missingRecommended.join(", ")}.`,
+    );
+  }
 
   return {
     asOf: new Date().toISOString(),
     progress: {
       nextIndex: asNumber(checkpoint?.next_index),
-      totalRows,
-      chartRows,
-      progressPct: totalRows ? asNumber(checkpoint?.next_index) / totalRows : 0,
+      totalClockRows,
+      focusExecutionRows,
+      progressPct: totalClockRows ? asNumber(checkpoint?.next_index) / totalClockRows : 0,
       simulatedTime,
       checkpointUpdatedAt: checkpoint?.updated_at ?? null,
       status: deriveStatus(checkpoint),

@@ -25,9 +25,9 @@ class RiskManager:
         if risk_multiplier <= 0:
             raise ValueError("Risk multiplier must remain positive.")
 
-        risk_fraction = self.risk_config.risk.risk_per_trade * risk_multiplier
-        risk_amount = equity * risk_fraction
-        position_size = risk_amount / risk_per_unit
+        target_risk_fraction = self.risk_config.risk.risk_per_trade * risk_multiplier
+        target_risk_amount = equity * target_risk_fraction
+        position_size = target_risk_amount / risk_per_unit
 
         max_notional = self.risk_config.risk.max_position_notional
         if max_notional is not None:
@@ -36,6 +36,11 @@ class RiskManager:
 
         if position_size <= 0:
             raise ValueError("Position size resolved to zero.")
+
+        # Normalize the realized/accounted risk to what is actually deployed after
+        # notional caps. Otherwise capped trades understate realized R multiples.
+        risk_amount = position_size * risk_per_unit
+        risk_fraction = risk_amount / equity if equity > 0 else 0.0
 
         first_partial_at_price = signal.entry_price + (
             self.risk_config.management.first_partial_at_r

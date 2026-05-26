@@ -5,8 +5,8 @@ import type { ReactNode } from "react";
 import { GlobalHomeDock } from "../components/navigation/GlobalHomeDock";
 
 export const metadata: Metadata = {
-  title: "Scalping System",
-  description: "Real-time scalping operating console",
+  title: "QuantFund AI",
+  description: "QuantFund AI research, replay, paper, and live trading cockpit",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

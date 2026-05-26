@@ -121,11 +121,13 @@ class BacktestRunner:
         start_date = start_date or self.config.system.history.start_date
         end_date = end_date or self.config.system.history.end_date
         execution_timeframe = self.config.system.market.execution_timeframe
+        profile = self.config.strategy.resolve_profile(execution_timeframe)
+        clock_timeframe = profile.clock_timeframe
         self._emit(
             "phase",
             status="running",
             phase="preparing backtest",
-            detail=f"{symbol_label} | {start_date} -> {end_date}",
+            detail=f"{symbol_label} | {start_date} -> {end_date} | clock {clock_timeframe}",
         )
 
         candles_by_symbol: dict[str, dict[str, tuple]] = {}
@@ -207,6 +209,7 @@ class BacktestRunner:
             ),
         )
         replay_engine = MultiAssetReplayEngine(
+            clock_timeframe=clock_timeframe,
             execution_timeframe=execution_timeframe,
             candles_by_symbol=candles_by_symbol,
         )
@@ -265,9 +268,9 @@ class BacktestRunner:
             "phase",
             status="running",
             phase="running backtest",
-            detail=(
+                detail=(
                 f"{symbol_scope} {execution_timeframe} | "
-                f"{total_steps:,} execution candles | "
+                f"{total_steps:,} {clock_timeframe} clock candles | "
                 f"starting at step {resume_index:,}"
             ),
         )
@@ -725,6 +728,8 @@ class BacktestRunner:
             "symbols": list(symbols),
             "symbol_scope": self._symbol_scope_label(symbols),
             "execution_timeframe": execution_timeframe,
+            "clock_timeframe": profile.clock_timeframe,
+            "trigger_timeframe": profile.trigger_timeframe,
             "base_timeframe": self.config.system.market.base_timeframe,
             "starting_equity": float(self.config.system.account.initial_equity),
             "profile_name": profile.name,
@@ -813,7 +818,7 @@ class BacktestRunner:
 
             management_decisions = runtime.engine.manage_snapshot(snapshot)
             forced_exit = False
-            if policy is not None and policy.force_flat:
+            if policy is not None and policy.force_flat and step.execution_just_closed:
                 forced_exit = self._force_gap_exit(
                     runtime=runtime,
                     snapshot=snapshot,

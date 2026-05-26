@@ -83,6 +83,8 @@ def build_runtime(config: ConfigBundle) -> RuntimeContainer:
     )
     engine = TradingEngine(
         execution_timeframe=active_profile.execution_timeframe,
+        trigger_timeframe=active_profile.trigger_timeframe,
+        clock_timeframe=active_profile.clock_timeframe,
         scanner=scanner,
         strategy=strategy,
         risk_manager=risk_manager,

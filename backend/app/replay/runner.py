@@ -66,11 +66,13 @@ class ReplayRunner:
         start_date = start_date or self.config.system.history.start_date
         end_date = end_date or self.config.system.history.end_date
         execution_timeframe = self.config.system.market.execution_timeframe
+        profile = self.config.strategy.resolve_profile(execution_timeframe)
+        clock_timeframe = profile.clock_timeframe
         self._emit(
             "phase",
             status="running",
             phase="preparing replay run",
-            detail=f"{symbol} | {start_date} -> {end_date}",
+            detail=f"{symbol} | {start_date} -> {end_date} | clock {clock_timeframe}",
         )
 
         history_path = (
@@ -106,6 +108,7 @@ class ReplayRunner:
         runtime = build_runtime(self.config)
         replay_engine = ReplayEngine(
             symbol=symbol,
+            clock_timeframe=clock_timeframe,
             execution_timeframe=execution_timeframe,
             candles_by_timeframe=candles_by_timeframe,
         )
@@ -139,7 +142,7 @@ class ReplayRunner:
 
         steps_this_run = 0
         save_every = max(1, replay_cfg.save_every_steps)
-        total_steps = len(candles_by_timeframe.get(execution_timeframe, ()))
+        total_steps = len(candles_by_timeframe.get(clock_timeframe, ()))
         update_stride = max(1, total_steps // 250) if total_steps else 1
         while replay_engine.has_next():
             if max_steps is not None and steps_this_run >= max_steps:
@@ -229,6 +232,8 @@ class ReplayRunner:
             "mode": "replay",
             "symbol": symbol,
             "execution_timeframe": execution_timeframe,
+            "clock_timeframe": profile.clock_timeframe,
+            "trigger_timeframe": profile.trigger_timeframe,
             "base_timeframe": self.config.system.market.base_timeframe,
             "starting_equity": float(self.config.system.account.initial_equity),
             "profile_name": profile.name,

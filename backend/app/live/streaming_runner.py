@@ -70,17 +70,19 @@ class StreamingLiveRunner(ForwardRunner):
         execution_timeframe = self.config.system.market.execution_timeframe
         forward_cfg = self._mode_config()
         runtime = build_runtime(self.config)
+        clock_timeframe = runtime.engine.clock_timeframe
         self._emit(
             "phase",
             status="running",
             phase="starting websocket live runner",
-            detail=f"{symbol} | {execution_timeframe}",
+            detail=f"{symbol} | {execution_timeframe} | clock {clock_timeframe}",
         )
         self._emit(
             "context",
             context={
                 "mode": "live",
                 "execution_tf": execution_timeframe,
+                "clock_tf": clock_timeframe,
                 "context_tf": ", ".join(self.config.system.market.context_timeframes) or "none",
                 "market_stream": f"{symbol.lower()}@kline_{self.config.system.market.base_timeframe}",
                 "live_orders_enabled": self.config.risk.execution.allow_live_orders,
@@ -144,9 +146,22 @@ class StreamingLiveRunner(ForwardRunner):
         except Exception as exc:
             self._log(f"Recent REST bootstrap skipped: {exc}", level="warning")
 
+        latest_clock_close = self._parse_timestamp(checkpoint.get("latest_clock_close")) if checkpoint else None
         latest_execution_close = self._parse_timestamp(checkpoint.get("latest_execution_close")) if checkpoint else None
+        if latest_clock_close is None:
+            latest_clock_close = latest_execution_close
+        if latest_clock_close is None:
+            latest_clock_close = self._latest_timeframe_close_from_base(
+                base_df,
+                symbol=symbol,
+                timeframe=clock_timeframe,
+            )
         if latest_execution_close is None:
-            latest_execution_close = self._latest_execution_close_from_base(base_df)
+            latest_execution_close = self._latest_timeframe_close_from_base(
+                base_df,
+                symbol=symbol,
+                timeframe=execution_timeframe,
+            )
 
         market_stream = BinanceMarketStreamClient(
             config=self.config,
@@ -181,10 +196,12 @@ class StreamingLiveRunner(ForwardRunner):
                         checkpoint_store=checkpoint_store,
                         symbol=symbol,
                         execution_timeframe=execution_timeframe,
+                        latest_clock_close=latest_clock_close,
                         latest_execution_close=latest_execution_close,
                         runtime=runtime,
                         polls_processed=events_processed,
                         snapshots_processed=snapshots_processed,
+                        resume_signature=resume_signature,
                         completed=False,
                     )
                     continue
@@ -230,11 +247,11 @@ class StreamingLiveRunner(ForwardRunner):
                     )
                     for timeframe, frame in frames.items()
                 }
-                execution_series = candles_by_timeframe.get(execution_timeframe, ())
+                clock_series = candles_by_timeframe.get(clock_timeframe, ())
                 new_candles = tuple(
                     candle
-                    for candle in execution_series
-                    if latest_execution_close is None or candle.close_time > latest_execution_close
+                    for candle in clock_series
+                    if latest_clock_close is None or candle.close_time > latest_clock_close
                 )
                 if not new_candles:
                     if events_processed % max(1, forward_cfg.save_every_polls) == 0:
@@ -242,6 +259,7 @@ class StreamingLiveRunner(ForwardRunner):
                             checkpoint_store=checkpoint_store,
                             symbol=symbol,
                             execution_timeframe=execution_timeframe,
+                            latest_clock_close=latest_clock_close,
                             latest_execution_close=latest_execution_close,
                             runtime=runtime,
                             polls_processed=events_processed,
@@ -251,10 +269,10 @@ class StreamingLiveRunner(ForwardRunner):
                         )
                     continue
 
-                for execution_candle in new_candles:
+                for clock_candle in new_candles:
                     snapshot = self._snapshot_for_candle(
                         symbol=symbol,
-                        execution_close=execution_candle.close_time,
+                        visible_until=clock_candle.close_time,
                         candles_by_timeframe=candles_by_timeframe,
                     )
                     closed_before = len(runtime.portfolio_manager.closed_trades)
@@ -273,12 +291,16 @@ class StreamingLiveRunner(ForwardRunner):
                         timestamp=result.snapshot.generated_at.isoformat(),
                         equity=result.portfolio.current_equity,
                     )
-                    latest_execution_close = execution_candle.close_time
+                    latest_clock_close = clock_candle.close_time
+                    latest_execution_candle = snapshot.latest(execution_timeframe)
+                    if latest_execution_candle is not None:
+                        latest_execution_close = latest_execution_candle.close_time
                     snapshots_processed += 1
                     self._emit(
                         "metrics",
                         metrics={
-                            "latest_close": latest_execution_close,
+                            "latest_clock_close": latest_clock_close,
+                            "latest_execution_close": latest_execution_close,
                             "market_events": events_processed,
                             "snapshots": snapshots_processed,
                             "closed_trades": len(runtime.portfolio_manager.closed_trades),
@@ -291,6 +313,7 @@ class StreamingLiveRunner(ForwardRunner):
                         checkpoint_store=checkpoint_store,
                         symbol=symbol,
                         execution_timeframe=execution_timeframe,
+                        latest_clock_close=latest_clock_close,
                         latest_execution_close=latest_execution_close,
                         runtime=runtime,
                         polls_processed=events_processed,
@@ -306,6 +329,7 @@ class StreamingLiveRunner(ForwardRunner):
                 checkpoint_store=checkpoint_store,
                 symbol=symbol,
                 execution_timeframe=execution_timeframe,
+                latest_clock_close=latest_clock_close,
                 latest_execution_close=latest_execution_close,
                 runtime=runtime,
                 polls_processed=events_processed,

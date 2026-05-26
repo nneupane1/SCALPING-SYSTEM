@@ -121,6 +121,9 @@ function SymbolLaneCard({
   totalR,
   realizedPnl,
   latestTradeAt,
+  factorBucket,
+  recommendation,
+  rationale,
   active,
   onClick,
 }: {
@@ -130,6 +133,9 @@ function SymbolLaneCard({
   totalR: number;
   realizedPnl: number;
   latestTradeAt: string | null;
+  factorBucket: string;
+  recommendation: "keep" | "watch" | "prune";
+  rationale: string;
   active: boolean;
   onClick: () => void;
 }) {
@@ -148,10 +154,15 @@ function SymbolLaneCard({
         <span className={totalR >= 0 ? "valueUp" : "valueDown"}>{number(totalR)}R</span>
         <span className={realizedPnl >= 0 ? "valueUp" : "valueDown"}>{money(realizedPnl)}</span>
       </div>
+      <div className="btTradeMeta">
+        <span>{factorBucket.replaceAll("_", " ")}</span>
+        <span className={`btMiniTag btMiniTag-${recommendation}`}>{recommendation}</span>
+      </div>
       <div className="btSymbolFoot">
         <span>{latestTradeAt ? shortTime(latestTradeAt) : "No close yet"}</span>
         {active ? <strong>Chart focus</strong> : <strong>Inspect</strong>}
       </div>
+      {active ? <div className="btSymbolHint">{rationale}</div> : null}
     </button>
   );
 }
@@ -188,7 +199,6 @@ function BreakdownPanel({
       <div className="btPanelHeader">
         <div>
           <h3>{title}</h3>
-          <p>Where the edge is expressing itself right now.</p>
         </div>
       </div>
       <div className="btBreakdownList">
@@ -291,11 +301,18 @@ export function BacktestCinema({ initialSnapshot }: BacktestCinemaProps) {
       totalR: stat?.totalR ?? 0,
       realizedPnl: stat?.realizedPnl ?? 0,
       latestTradeAt: stat?.latestTradeAt ?? null,
+      factorBucket: stat?.factorBucket ?? "general_crypto",
+      recommendation: stat?.recommendation ?? "watch",
+      rationale:
+        stat?.rationale ??
+        "No closed-trade evidence yet. Keep it in watch mode until the research sample matures.",
     };
   });
   const focusedGapWindows = active.gapWindows.filter((gap) => gap.symbol === active.summary.activeSymbol);
   const progressPct = Math.max(0, Math.min(1, active.progress.progressPct));
   const progressStyle = { width: `${progressPct * 100}%` } as CSSProperties;
+  const visibleAnomalies = active.anomalies.slice(0, 3);
+  const hiddenAnomalyCount = Math.max(0, active.anomalies.length - visibleAnomalies.length);
 
   const handleSymbolSelect = (symbol: string) => {
     setActiveSymbol(symbol);
@@ -309,22 +326,23 @@ export function BacktestCinema({ initialSnapshot }: BacktestCinemaProps) {
       <ModeSwitchRail />
       <section className="btHero">
         <div className="btHeroCopy">
-          <div className="btEyebrow">Backtest command center</div>
-          <h1>Replay the strategy like a market machine, not a spreadsheet.</h1>
+          <div className="btEyebrow">QuantFund AI | Backtest cinema</div>
+          <h1>Run the tape. Read the edge.</h1>
           <p>
-            This view reads the live-growing backtest artifacts directly from disk, so the
-            interface advances while the historical engine is still processing.
+            One portfolio pass, one focused tape, one honest timing model.
           </p>
         </div>
         <div className="btHeroMeta">
           <StatusBadge status={active.progress.status} />
-          <div className="btHeroMetaLine">
-            <span>Updated</span>
-            <strong>{longDate(active.progress.checkpointUpdatedAt)}</strong>
-          </div>
-          <div className="btHeroMetaLine">
-            <span>Simulated time</span>
-            <strong>{longDate(active.progress.simulatedTime)}</strong>
+          <div className="btHeroStatRack">
+            <div className="btHeroStat">
+              <span>Updated</span>
+              <strong>{longDate(active.progress.checkpointUpdatedAt)}</strong>
+            </div>
+            <div className="btHeroStat">
+              <span>Simulated</span>
+              <strong>{longDate(active.progress.simulatedTime)}</strong>
+            </div>
           </div>
           <div className="btToggleRow">
             <button
@@ -341,15 +359,19 @@ export function BacktestCinema({ initialSnapshot }: BacktestCinemaProps) {
           <div className="btProgressCopy">
             <span>{active.summary.symbolScope}</span>
             <strong>
-              {active.summary.executionTimeframe} execution | {compact(active.progress.nextIndex)} /{" "}
-              {compact(active.progress.totalRows)} portfolio steps
+              {active.summary.executionTimeframe} execution | {active.summary.clockTimeframe} clock |{" "}
+              {active.summary.triggerTimeframe} trigger
             </strong>
           </div>
           <div className="btProgressBar">
             <div className="btProgressFill" style={progressStyle} />
           </div>
           <div className="btProgressCopy btProgressCopy-bottom">
-            <span>{percent(progressPct)} complete | chart focus {active.summary.activeSymbol}</span>
+            <span>
+              {percent(progressPct)} complete | {compact(active.progress.nextIndex)} /{" "}
+              {compact(active.progress.totalClockRows)} portfolio clock steps | chart focus{" "}
+              {active.summary.activeSymbol}
+            </span>
             <strong>{money(active.summary.currentEquity)}</strong>
           </div>
         </div>
@@ -392,11 +414,7 @@ export function BacktestCinema({ initialSnapshot }: BacktestCinemaProps) {
         <div className="btPanelHeader">
           <div>
             <h3>Watchlist lane</h3>
-            <p>
-              The portfolio runs one aggregate backtest while the chart drills into one
-              symbol at a time. Use these cards to pivot the tape without losing the
-              account-level context.
-            </p>
+            <p>Pivot the active tape without losing portfolio truth.</p>
           </div>
         </div>
         <div className="btSymbolGrid">
@@ -409,6 +427,9 @@ export function BacktestCinema({ initialSnapshot }: BacktestCinemaProps) {
               totalR={item.totalR}
               realizedPnl={item.realizedPnl}
               latestTradeAt={item.latestTradeAt}
+              factorBucket={item.factorBucket}
+              recommendation={item.recommendation}
+              rationale={item.rationale}
               active={item.symbol === active.summary.activeSymbol}
               onClick={() => handleSymbolSelect(item.symbol)}
             />
@@ -421,8 +442,12 @@ export function BacktestCinema({ initialSnapshot }: BacktestCinemaProps) {
         symbols={active.summary.symbols}
         activeSymbol={active.summary.activeSymbol}
         executionTimeframe={active.summary.executionTimeframe}
+        clockTimeframe={active.summary.clockTimeframe}
+        triggerTimeframe={active.summary.triggerTimeframe}
         defaultStartDate={active.summary.startDate}
         defaultEndDate={active.summary.endDate}
+        recommendedUniverse={active.summary.recommendedUniverse}
+        selectionPolicy={active.summary.selectionPolicy}
       />
 
       {error ? <section className="btErrorBanner">{error}</section> : null}
@@ -447,7 +472,7 @@ export function BacktestCinema({ initialSnapshot }: BacktestCinemaProps) {
             <div className="btPanelHeader">
               <div>
                 <h3>Run posture</h3>
-                <p>What the historical engine is expressing at this exact moment.</p>
+                <p>Current state at a glance.</p>
               </div>
             </div>
             <div className="btStatementGrid">
@@ -460,6 +485,16 @@ export function BacktestCinema({ initialSnapshot }: BacktestCinemaProps) {
               <div className="btStatementCard">
                 <span>Portfolio scope</span>
                 <strong>{active.summary.symbolScope}</strong>
+              </div>
+              <div className="btStatementCard">
+                <span>Clock / trigger</span>
+                <strong>
+                  {active.summary.clockTimeframe} / {active.summary.triggerTimeframe}
+                </strong>
+              </div>
+              <div className="btStatementCard">
+                <span>Selection policy</span>
+                <strong>Prune by evidence</strong>
               </div>
               <div className="btStatementCard">
                 <span>Chart focus</span>
@@ -479,18 +514,23 @@ export function BacktestCinema({ initialSnapshot }: BacktestCinemaProps) {
               </div>
             </div>
             <div className="btAnomalyList">
-              {active.anomalies.map((anomaly) => (
+              {visibleAnomalies.map((anomaly) => (
                 <div className="btAnomalyRow" key={anomaly}>
                   {anomaly}
                 </div>
               ))}
+              {hiddenAnomalyCount > 0 ? (
+                <div className="btAnomalyRow btAnomalyRow-muted">
+                  +{hiddenAnomalyCount} more research notes
+                </div>
+              ) : null}
             </div>
           </section>
           <section className="btPanel">
             <div className="btPanelHeader">
               <div>
                 <h3>Window telemetry</h3>
-                <p>The active chart window is now aligned with the shared chart engine.</p>
+                <p>What the current chart window is carrying.</p>
               </div>
             </div>
             <div className="btStatementGrid">
@@ -499,8 +539,8 @@ export function BacktestCinema({ initialSnapshot }: BacktestCinemaProps) {
                 <strong>{compact(active.candles.length)}</strong>
               </div>
               <div className="btStatementCard">
-                <span>Focus tape rows</span>
-                <strong>{compact(active.progress.chartRows)}</strong>
+                <span>Focus execution rows</span>
+                <strong>{compact(active.progress.focusExecutionRows)}</strong>
               </div>
               <div className="btStatementCard">
                 <span>Equity points</span>
@@ -514,11 +554,17 @@ export function BacktestCinema({ initialSnapshot }: BacktestCinemaProps) {
                 <span>Gap shadows</span>
                 <strong>{active.windowGapWindows.length}</strong>
               </div>
+              <div className="btStatementCard">
+                <span>Clock footprint</span>
+                <strong>{compact(active.progress.totalClockRows)}</strong>
+              </div>
             </div>
             <div className="btAnomalyList">
               <div className="btAnomalyRow">
-                Drag directly on the chart to pan. Use the mouse wheel to zoom. Price, volume,
-                equity, trade markers, and outage fences now stay in one synchronized surface.
+                Drag to pan. Wheel to zoom. Price, volume, equity, trades, and gap fences stay synchronized.
+              </div>
+              <div className="btAnomalyRow">
+                Clock {active.summary.clockTimeframe}. Arm on {active.summary.executionTimeframe}. Fire on {active.summary.triggerTimeframe}.
               </div>
             </div>
           </section>
@@ -535,14 +581,14 @@ export function BacktestCinema({ initialSnapshot }: BacktestCinemaProps) {
         <PnlLedger
           trades={active.recentTrades}
           title="Backtest PnL Ledger"
-          subtitle="Real-time closed-trade audit while the historical engine is still running."
+          subtitle="Closed trades while the run is still in motion."
         />
 
         <section className="btPanel">
           <div className="btPanelHeader">
             <div>
               <h3>Gap guard ledger</h3>
-              <p>Historical outages the engine now fences off instead of pretending continuity.</p>
+              <p>Real outages fenced off instead of faked away.</p>
             </div>
           </div>
           {focusedGapWindows.length === 0 ? (

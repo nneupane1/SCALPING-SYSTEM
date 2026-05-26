@@ -90,18 +90,21 @@ class StrategyProfileTests(unittest.TestCase):
 
         self.assertEqual("5m", rapid.execution_timeframe)
         self.assertEqual("1m", rapid.trigger_timeframe)
+        self.assertEqual("1m", rapid.clock_timeframe)
         self.assertEqual(8, rapid.cadence.expected_trades_per_day_low)
         self.assertEqual(1.35, rapid.scanner.min_impulse_body_ratio)
         self.assertEqual("secondary", rapid.cadence.runner_emphasis)
 
         self.assertEqual("15m", slow.execution_timeframe)
         self.assertEqual("5m", slow.trigger_timeframe)
+        self.assertEqual("5m", slow.clock_timeframe)
         self.assertEqual(2, slow.cadence.expected_trades_per_day_low)
         self.assertEqual(1.6, slow.scanner.min_impulse_body_ratio)
         self.assertEqual("primary", slow.cadence.runner_emphasis)
 
         self.assertEqual("30m", fallback.execution_timeframe)
         self.assertEqual("30m", fallback.trigger_timeframe)
+        self.assertEqual("30m", fallback.clock_timeframe)
         self.assertEqual(1.5, fallback.scanner.min_impulse_body_ratio)
         self.assertEqual("balanced", fallback.cadence.runner_emphasis)
 

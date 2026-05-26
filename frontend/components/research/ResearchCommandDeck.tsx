@@ -8,8 +8,12 @@ type ResearchCommandDeckProps = {
   symbols: string[];
   activeSymbol: string;
   executionTimeframe: string;
+  clockTimeframe: string;
+  triggerTimeframe: string;
   defaultStartDate: string | null;
   defaultEndDate: string | null;
+  recommendedUniverse: string[];
+  selectionPolicy: string;
 };
 
 function toDateInput(value: string | null): string {
@@ -28,8 +32,12 @@ export function ResearchCommandDeck({
   symbols,
   activeSymbol: initialActiveSymbol,
   executionTimeframe,
+  clockTimeframe,
+  triggerTimeframe,
   defaultStartDate,
   defaultEndDate,
+  recommendedUniverse,
+  selectionPolicy,
 }: ResearchCommandDeckProps) {
   const router = useRouter();
   const [watchlist, setWatchlist] = useState(symbols.join(","));
@@ -48,6 +56,12 @@ export function ResearchCommandDeck({
     .filter(Boolean)
     .filter((value, index, array) => array.indexOf(value) === index);
   const resolvedReplaySymbol = (replaySymbol || normalizedWatchlist[0] || "BTCUSDT").toUpperCase();
+  const legacyUniverse = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "AVAXUSDT"];
+  const applyUniverse = (universe: string[]) => {
+    const joined = universe.join(",");
+    setWatchlist(joined);
+    setReplaySymbol(universe[0] ?? "BTCUSDT");
+  };
 
   const launch = async (mode: "backtest" | "replay") => {
     if (!backtestStart || !backtestEnd) {
@@ -93,10 +107,7 @@ export function ResearchCommandDeck({
       <div className="btPanelHeader">
         <div>
           <h3>Research Control</h3>
-          <p>
-            Launch fresh backtests, jump into replay, and keep the same London / New
-            York execution windows while the underlying market data remains 24/7.
-          </p>
+          <p>Launch runs fast. Keep the timing model honest.</p>
         </div>
       </div>
 
@@ -108,6 +119,9 @@ export function ResearchCommandDeck({
             onChange={(event) => setWatchlist(event.target.value.toUpperCase())}
             className="researchInput"
           />
+          <small className="subtle">
+            Diversify the scan universe. Let the selector prune by evidence.
+          </small>
         </label>
         <label className="researchField">
           <span>Replay focus symbol</span>
@@ -116,6 +130,9 @@ export function ResearchCommandDeck({
             onChange={(event) => setReplaySymbol(event.target.value.toUpperCase())}
             className="researchInput"
           />
+          <small className="subtle">
+            Replay stays single-symbol so the tape stays readable.
+          </small>
         </label>
         <label className="researchField">
           <span>Start date</span>
@@ -154,6 +171,18 @@ export function ResearchCommandDeck({
           <strong>{executionTimeframe}</strong>
         </div>
         <div className="researchMetaCard">
+          <span>Clock layer</span>
+          <strong>{clockTimeframe}</strong>
+        </div>
+        <div className="researchMetaCard">
+          <span>Trigger layer</span>
+          <strong>{triggerTimeframe}</strong>
+        </div>
+        <div className="researchMetaCard">
+          <span>Logic contract</span>
+          <strong>Arm on {executionTimeframe}, fire on {triggerTimeframe}</strong>
+        </div>
+        <div className="researchMetaCard">
           <span>Watchlist scope</span>
           <strong>{symbolScope}</strong>
         </div>
@@ -169,6 +198,24 @@ export function ResearchCommandDeck({
           <span>Range preset</span>
           <strong>Entire downloaded history by default</strong>
         </div>
+      </div>
+
+      <div className="researchPresetRow">
+        <button
+          type="button"
+          className="researchGhostButton"
+          onClick={() => applyUniverse(recommendedUniverse)}
+        >
+          Use evidence-pruned universe
+        </button>
+        <button
+          type="button"
+          className="researchGhostButton"
+          onClick={() => applyUniverse(legacyUniverse)}
+        >
+          Load legacy L1 basket
+        </button>
+        <span className="subtle">{selectionPolicy}</span>
       </div>
 
       <div className="researchActionRow">
@@ -207,9 +254,7 @@ export function ResearchCommandDeck({
 
       <div className="researchFooter">
         <span>
-          Backtest launches use the full watchlist. Replay uses one focus symbol. Runner
-          dates are passed as UTC midnight boundaries, while session gating still comes
-          from the strategy config.
+          Backtest uses the full watchlist. Replay uses one focus symbol. Session gating still comes from config.
         </span>
         {message ? <strong>{message}</strong> : null}
       </div>

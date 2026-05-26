@@ -49,7 +49,13 @@ class PullbackScalpStrategy(BaseStrategy):
         self.sessions_config = sessions_config
         self.last_rejection_reason: str | None = None
 
-    def evaluate(self, snapshot: MarketSnapshot, scanner_decision: ScannerDecision) -> TradeSignal | None:
+    def evaluate(
+        self,
+        snapshot: MarketSnapshot,
+        scanner_decision: ScannerDecision,
+        *,
+        current_trigger_candle: Candle | None = None,
+    ) -> TradeSignal | None:
         self.last_rejection_reason = None
 
         def block(reason: str) -> None:
@@ -78,6 +84,7 @@ class PullbackScalpStrategy(BaseStrategy):
             snapshot=snapshot,
             scanner_decision=scanner_decision,
             execution_candle=execution_candle,
+            current_trigger_candle=current_trigger_candle,
             side=side,
             impulse_range=impulse_range,
         )
@@ -216,6 +223,7 @@ class PullbackScalpStrategy(BaseStrategy):
                 "scanner_pullback_overlap_ratio": scanner_decision.metrics.get("pullback_overlap_ratio"),
                 "scanner_pullback_tightness_ratio": scanner_decision.metrics.get("pullback_tightness_ratio"),
                 "scanner_setup_score": scanner_decision.metrics.get("scanner_setup_score"),
+                "execution_close": execution_candle.close_time.isoformat(),
             },
         )
 
@@ -241,6 +249,7 @@ class PullbackScalpStrategy(BaseStrategy):
         snapshot: MarketSnapshot,
         scanner_decision: ScannerDecision,
         execution_candle: Candle,
+        current_trigger_candle: Candle | None,
         side: Side,
         impulse_range: float,
     ) -> dict[str, object] | None:
@@ -249,18 +258,15 @@ class PullbackScalpStrategy(BaseStrategy):
             self.last_rejection_reason = f"missing {self.trigger_timeframe} trigger candles"
             return None
 
-        if self.trigger_timeframe == self.execution_timeframe:
+        if current_trigger_candle is not None:
+            candidates = (current_trigger_candle,)
+        elif self.trigger_timeframe == self.execution_timeframe:
             candidates = (execution_candle,)
         else:
-            candidates = tuple(
-                candle
-                for candle in trigger_series
-                if candle.open_time >= execution_candle.open_time and candle.close_time <= execution_candle.close_time
-            )
+            latest_trigger_candle = snapshot.latest(self.trigger_timeframe)
+            candidates = () if latest_trigger_candle is None else (latest_trigger_candle,)
         if not candidates:
-            self.last_rejection_reason = (
-                f"no {self.trigger_timeframe} trigger candles found inside the current {self.execution_timeframe} bar"
-            )
+            self.last_rejection_reason = f"no current {self.trigger_timeframe} trigger candle is available"
             return None
 
         last_error = "no valid trigger candle found"
@@ -291,9 +297,18 @@ class PullbackScalpStrategy(BaseStrategy):
         reference = self._reference_candles(
             trigger_series=snapshot.series(self.trigger_timeframe),
             trigger_candle=trigger_candle,
+            scanner_decision=scanner_decision,
         )
         if not reference:
             self.last_rejection_reason = "not enough trigger reference candles"
+            return None
+        last_pullback_close = (
+            scanner_decision.pullback_candles[-1].close_time
+            if scanner_decision.pullback_candles
+            else None
+        )
+        if last_pullback_close is not None and trigger_candle.close_time <= last_pullback_close:
+            self.last_rejection_reason = "trigger candle belongs to the pre-breakout pullback structure"
             return None
 
         reference_mean_body = fmean(candle.body_size for candle in reference) if reference else 0.0
@@ -434,14 +449,28 @@ class PullbackScalpStrategy(BaseStrategy):
         *,
         trigger_series: tuple[Candle, ...],
         trigger_candle: Candle,
+        scanner_decision: ScannerDecision,
     ) -> tuple[Candle, ...]:
         try:
             current_index = trigger_series.index(trigger_candle)
         except ValueError:
             return ()
         lookback = max(1, self.trigger_config.reference_lookback_bars)
-        start_index = max(0, current_index - lookback)
-        return trigger_series[start_index:current_index]
+        prior_candles = trigger_series[:current_index]
+        if not prior_candles:
+            return ()
+        if scanner_decision.pullback_candles:
+            post_setup_candidates = tuple(
+                candle
+                for candle in prior_candles
+                if candle.close_time > scanner_decision.pullback_candles[-1].close_time
+            )
+            if len(post_setup_candidates) >= lookback:
+                return post_setup_candidates[-lookback:]
+            if post_setup_candidates:
+                return post_setup_candidates
+        start_index = max(0, len(prior_candles) - lookback)
+        return prior_candles[start_index:]
 
     def _micro_tightness_score(self, reference: tuple[Candle, ...], impulse_range: float) -> float:
         if not reference:

@@ -74,17 +74,19 @@ class ForwardRunner:
         execution_timeframe = self.config.system.market.execution_timeframe
         forward_cfg = self._mode_config()
         runtime = build_runtime(self.config)
+        clock_timeframe = runtime.engine.clock_timeframe
         self._emit(
             "phase",
             status="running",
             phase=f"starting {self.mode} forward runner",
-            detail=f"{symbol} | {execution_timeframe}",
+            detail=f"{symbol} | {execution_timeframe} | clock {clock_timeframe}",
         )
         self._emit(
             "context",
             context={
                 "mode": self.mode,
                 "execution_tf": execution_timeframe,
+                "clock_tf": clock_timeframe,
                 "context_tf": ", ".join(self.config.system.market.context_timeframes) or "none",
                 "poll_seconds": forward_cfg.poll_seconds,
             },
@@ -129,9 +131,22 @@ class ForwardRunner:
             frame=base_df,
             last_persisted_at=last_realtime_persisted_at,
         )
+        latest_clock_close = self._parse_timestamp(checkpoint.get("latest_clock_close")) if checkpoint else None
         latest_execution_close = self._parse_timestamp(checkpoint.get("latest_execution_close")) if checkpoint else None
+        if latest_clock_close is None:
+            latest_clock_close = latest_execution_close
+        if latest_clock_close is None:
+            latest_clock_close = self._latest_timeframe_close_from_base(
+                base_df,
+                symbol=symbol,
+                timeframe=clock_timeframe,
+            )
         if latest_execution_close is None:
-            latest_execution_close = self._latest_execution_close_from_base(base_df)
+            latest_execution_close = self._latest_timeframe_close_from_base(
+                base_df,
+                symbol=symbol,
+                timeframe=execution_timeframe,
+            )
 
         polls_processed = 0
         snapshots_processed = 0
@@ -176,16 +191,16 @@ class ForwardRunner:
                 )
                 for timeframe, frame in frames.items()
             }
-            execution_series = candles_by_timeframe.get(execution_timeframe, ())
+            clock_series = candles_by_timeframe.get(clock_timeframe, ())
             new_candles = tuple(
                 candle
-                for candle in execution_series
-                if latest_execution_close is None or candle.close_time > latest_execution_close
+                for candle in clock_series
+                if latest_clock_close is None or candle.close_time > latest_clock_close
             )
 
             if not new_candles:
                 self._log(
-                    f"No new closed {execution_timeframe} candle detected on poll {polls_processed}. "
+                    f"No new closed {clock_timeframe} candle detected on poll {polls_processed}. "
                     "State checkpoint refreshed.",
                     level="info",
                 )
@@ -193,6 +208,7 @@ class ForwardRunner:
                     checkpoint_store=checkpoint_store,
                     symbol=symbol,
                     execution_timeframe=execution_timeframe,
+                    latest_clock_close=latest_clock_close,
                     latest_execution_close=latest_execution_close,
                     runtime=runtime,
                     polls_processed=polls_processed,
@@ -204,10 +220,10 @@ class ForwardRunner:
                     time.sleep(forward_cfg.poll_seconds)
                 continue
 
-            for execution_candle in new_candles:
+            for clock_candle in new_candles:
                 snapshot = self._snapshot_for_candle(
                     symbol=symbol,
-                    execution_close=execution_candle.close_time,
+                    visible_until=clock_candle.close_time,
                     candles_by_timeframe=candles_by_timeframe,
                 )
                 closed_before = len(runtime.portfolio_manager.closed_trades)
@@ -226,12 +242,16 @@ class ForwardRunner:
                     timestamp=result.snapshot.generated_at.isoformat(),
                     equity=result.portfolio.current_equity,
                 )
-                latest_execution_close = execution_candle.close_time
+                latest_clock_close = clock_candle.close_time
+                latest_execution_candle = snapshot.latest(execution_timeframe)
+                if latest_execution_candle is not None:
+                    latest_execution_close = latest_execution_candle.close_time
                 snapshots_processed += 1
                 self._emit(
                     "metrics",
                     metrics={
-                        "latest_close": latest_execution_close,
+                        "latest_clock_close": latest_clock_close,
+                        "latest_execution_close": latest_execution_close,
                         "snapshots": snapshots_processed,
                         "closed_trades": len(runtime.portfolio_manager.closed_trades),
                         "equity": f"{runtime.portfolio_manager.current_equity:.2f}",
@@ -242,6 +262,7 @@ class ForwardRunner:
                     checkpoint_store=checkpoint_store,
                     symbol=symbol,
                     execution_timeframe=execution_timeframe,
+                    latest_clock_close=latest_clock_close,
                     latest_execution_close=latest_execution_close,
                     runtime=runtime,
                     polls_processed=polls_processed,
@@ -257,6 +278,7 @@ class ForwardRunner:
             checkpoint_store=checkpoint_store,
             symbol=symbol,
             execution_timeframe=execution_timeframe,
+            latest_clock_close=latest_clock_close,
             latest_execution_close=latest_execution_close,
             runtime=runtime,
             polls_processed=polls_processed,
@@ -337,16 +359,22 @@ class ForwardRunner:
             merged = merged.tail(warmup_limit)
         return merged
 
-    def _latest_execution_close_from_base(self, base_df: pd.DataFrame) -> datetime | None:
+    def _latest_timeframe_close_from_base(
+        self,
+        base_df: pd.DataFrame,
+        *,
+        symbol: str,
+        timeframe: str,
+    ) -> datetime | None:
         frames = self.timeframe_builder.build_timeframes(base_df)
-        execution_frame = frames.get(self.config.system.market.execution_timeframe)
+        execution_frame = frames.get(timeframe)
         if execution_frame is None or execution_frame.empty:
             return None
         candles = dataframe_to_candles(
             execution_frame,
-            symbol=self.config.system.market.symbol,
-            timeframe=self.config.system.market.execution_timeframe,
-            index_is_close_time=True,
+            symbol=symbol,
+            timeframe=timeframe,
+            index_is_close_time=(timeframe != self.config.system.market.base_timeframe),
         )
         if not candles:
             return None
@@ -356,14 +384,14 @@ class ForwardRunner:
         self,
         *,
         symbol: str,
-        execution_close: datetime,
+        visible_until: datetime,
         candles_by_timeframe: dict[str, tuple[Any, ...]],
     ) -> MarketSnapshot:
         visible = {
-            timeframe: tuple(candle for candle in series if candle.close_time <= execution_close)
+            timeframe: tuple(candle for candle in series if candle.close_time <= visible_until)
             for timeframe, series in candles_by_timeframe.items()
         }
-        return MarketSnapshot(symbol=symbol, generated_at=execution_close, candles=visible)
+        return MarketSnapshot(symbol=symbol, generated_at=visible_until, candles=visible)
 
     def _write_checkpoint(
         self,
@@ -371,6 +399,7 @@ class ForwardRunner:
         checkpoint_store: JsonCheckpointStore,
         symbol: str,
         execution_timeframe: str,
+        latest_clock_close: datetime | None,
         latest_execution_close: datetime | None,
         runtime,
         polls_processed: int,
@@ -383,6 +412,7 @@ class ForwardRunner:
                 "mode": self.mode,
                 "symbol": symbol,
                 "execution_timeframe": execution_timeframe,
+                "latest_clock_close": latest_clock_close.isoformat() if latest_clock_close is not None else None,
                 "latest_execution_close": (
                     latest_execution_close.isoformat() if latest_execution_close is not None else None
                 ),
@@ -401,6 +431,8 @@ class ForwardRunner:
             "mode": self.mode,
             "symbol": symbol,
             "execution_timeframe": execution_timeframe,
+            "clock_timeframe": profile.clock_timeframe,
+            "trigger_timeframe": profile.trigger_timeframe,
             "base_timeframe": self.config.system.market.base_timeframe,
             "starting_equity": float(self.config.system.account.initial_equity),
             "base_currency": self.config.system.account.base_currency,

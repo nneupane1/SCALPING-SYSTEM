@@ -19,7 +19,7 @@ function routeLabel(pathname: string): string {
   if (pathname === "/dashboard") {
     return "Forward Desk";
   }
-  return "Scalping System";
+  return "QuantFund AI";
 }
 
 export function GlobalHomeDock() {
@@ -30,7 +30,7 @@ export function GlobalHomeDock() {
   return (
     <div className="globalHomeDock">
       <div className="globalHomeBrand">
-        <span>Scalping System</span>
+        <span>QuantFund AI</span>
         <strong>{label}</strong>
       </div>
       <div className="globalHomeActions">

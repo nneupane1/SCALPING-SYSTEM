@@ -1,4 +1,4 @@
-# Scalping System
+# QuantFund AI Scalping System
 
 Scalping System is a modular real-time trading platform scaffold for Binance
 market data. It is designed around one central idea: a scalping engine should
@@ -32,10 +32,12 @@ matters most for intraday research:
 - [Architectural Philosophy](#architectural-philosophy)
 - [Repository Map](#repository-map)
 - [High-Level Operating Model](#high-level-operating-model)
+- [Current Refactor Snapshot](#current-refactor-snapshot)
 - [Operational Workflow](#operational-workflow)
 - [Historical Research Workflow](#historical-research-workflow)
 - [Mode Model](#mode-model)
 - [Timeframe Hierarchy](#timeframe-hierarchy)
+- [Clock and Trigger Model](#clock-and-trigger-model)
 - [Timeframe Expression](#timeframe-expression)
 - [Configuration Model](#configuration-model)
 - [Data Layer](#data-layer)
@@ -179,6 +181,47 @@ views such as `15m` are still supported as alternate strategy expressions, but
 they are not supposed to be materialized by default unless the active config
 actually needs them.
 
+## Current Refactor Snapshot
+
+The repository is no longer in the earlier hybrid state where a `5m` backtest
+could look as if it were using `1m` precision while still making decisions with
+information that only became visible after the entire `5m` bar had closed. The
+current refactor package hardened both the backend timing semantics and the
+frontend representation of those semantics.
+
+The most important changes are:
+
+| Area | What changed | Why it matters |
+| --- | --- | --- |
+| Lower-timeframe trigger honesty | the engine now distinguishes `execution_timeframe`, `trigger_timeframe`, and `clock_timeframe` | removes the earlier intrabar hindsight path |
+| Backtest / replay stepping | historical engines now advance on the true resolved clock rather than assuming execution-timeframe stepping | lets a `5m` setup use a real `1m` trigger without lying about time |
+| Setup lifecycle | scanner decisions can now be armed at the execution close and evaluated later on the next valid trigger candle | makes trigger timing event-driven instead of retroactive |
+| Position management | `bars_held` and management decisions advance only on a new execution close, even if the clock is faster | keeps trade management consistent with the strategy’s execution frame |
+| Watchlist defaults | the research watchlist is now intentionally diversified and evidence-pruned | moves the system away from redundant alt-L1 clustering |
+| Backtest viewer contract | `/backtest` now exposes execution layer, clock layer, trigger layer, focus symbol, and evidence-pruning hints directly in the UI | prevents the frontend from presenting a fake “5m-only” narrative |
+| Brand shell | the frontend root and global dock now present the system as `QuantFund AI` | gives the operator cockpit one coherent product identity |
+
+### Current default research universe
+
+The current `system.example.yaml` watchlist is:
+
+| Bucket | Default symbol | Why it is in the universe |
+| --- | --- | --- |
+| Core beta | `BTCUSDT` | benchmark crypto beta and primary tape |
+| Smart-contract core | `ETHUSDT` | broad secondary leader and liquidity anchor |
+| Exchange-chain | `BNBUSDT` | exchange / BNB-chain factor |
+| High-beta L1 | `SOLUSDT` | fast expansion candidate without stacking multiple similar L1s |
+| Oracle / infra | `LINKUSDT` | infrastructure-style crypto factor |
+| Payments | `XRPUSDT` | different participation profile from core beta |
+| DeFi lending | `AAVEUSDT` | DeFi expression without overloading the universe |
+| Payments alt | `TRXUSDT` | alternate payments / flow bucket |
+
+This is not presented as a claim that these assets are truly uncorrelated in an
+absolute sense. The point is narrower and more practical: the default universe
+is now shaped to reduce redundant overlap relative to a basket made mostly of
+`BTC + ETH + multiple similar L1s`. The rule going forward is not “keep every
+symbol forever.” The rule is `prune by evidence`.
+
 ## Operational Workflow
 
 The intended end-to-end workflow is:
@@ -256,6 +299,15 @@ research loop has moved from “does BTC alone produce enough opportunities?” 
 “given a professional watchlist, which setups would the shared account actually
 take?”
 
+The current refactor takes that one step further. The codebase now assumes that
+watchlist construction is part of the edge model itself. The default universe
+is intentionally diversified across factor buckets, the selector can prune by
+evidence instead of by preference, and the backtest UI now exposes that
+evidence directly through per-symbol `keep / watch / prune` guidance. That
+means research is no longer just “did this symbol fire?” It is “did this symbol
+earn one of the limited portfolio slots at that time, and is it still earning
+its place in the universe over a meaningful sample?”
+
 ### Watchlist Research Flow
 
 ```mermaid
@@ -326,6 +378,59 @@ belongs to a future context-filter path, not to the current live scanner.
 Additional timeframes may be added later, but they should still be rebuilt from
 the same `1m` source rather than introduced as external, pre-aggregated truth.
 
+## Clock and Trigger Model
+
+The engine no longer treats “execution timeframe” and “simulation clock” as the
+same concept by default. This matters most whenever a setup is structurally
+defined on one timeframe but triggered on a faster one.
+
+The current timing contract is:
+
+| Layer | Meaning | Current default `5m` profile |
+| --- | --- | --- |
+| `canonical timeframe` | source of truth on disk and in memory | `1m` |
+| `execution timeframe` | where the setup is defined and where management cadence lives | `5m` |
+| `trigger timeframe` | where the entry confirmation candle must close | `1m` |
+| `clock timeframe` | the actual event loop that advances replay/backtest/live state | resolved to the faster of execution and trigger, so `1m` for the default `5m` profile |
+
+### Why this refactor was necessary
+
+The earlier hybrid approach could arm a valid `5m` setup and then retrospectively
+search all `1m` candles inside the already-closed `5m` bar to pick the first
+valid trigger. That made the backtest look precise, but it was semantically
+wrong because the engine was benefiting from information that had not yet been
+earned at the earlier `1m` trigger close.
+
+The new rule is stricter:
+
+1. a valid scanner decision is formed on the `5m` execution close
+2. that decision is stored as an armed setup
+3. only the current `1m` candle after that execution close is allowed to fire
+4. position management still advances only when a new `5m` execution candle has actually closed
+
+### Timing flow
+
+```mermaid
+flowchart LR
+    A[Canonical 1m candles] --> B[Closed 5m execution candle]
+    B --> C[Scanner decision]
+    C --> D[Armed setup]
+    D --> E[Next 1m trigger candle closes]
+    E --> F{Trigger valid?}
+    F -->|yes| G[Signal emitted]
+    F -->|no| H[Stay armed or expire]
+    G --> I[Position open]
+    I --> J[Management only on next closed 5m candle]
+```
+
+This distinction is now reflected end to end:
+
+- configuration resolves a `clock_timeframe`
+- timeframe building includes whatever frames the clock/trigger/context stack needs
+- replay and backtest step on the resolved clock
+- live and paper runners honor the same timing rule
+- the frontend now surfaces execution, clock, and trigger as separate layers
+
 ## Timeframe Expression
 
 The strategy logic does not change when moving from `5m` to `15m`, but the
@@ -381,6 +486,17 @@ Long-term configuration goals:
 - allow safe switching between `replay`, `paper`, and `live`
 - define symbols, sessions, and execution permissions centrally
 - preserve an auditable record of the config that produced each run
+
+### Current configuration defaults that matter operationally
+
+| Config area | Current default | Why it matters |
+| --- | --- | --- |
+| `system.example.yaml -> market.watchlist_symbols` | `BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, LINKUSDT, XRPUSDT, AAVEUSDT, TRXUSDT` | the default research basket is now diversified by design |
+| `system.example.yaml -> market.execution_timeframe` | `5m` | setups and management are still defined on `5m` by default |
+| `strategy.example.yaml -> profiles.5m.trigger.timeframe` | `1m` | entry confirmation now happens on a real lower-timeframe clock |
+| `strategy.example.yaml -> profiles.5m.cadence.expected_trades_per_day_*` | `8` to `12` | the research target is encoded as an expectation, not as a promise |
+| `risk.example.yaml -> risk.max_open_positions` | `2` | the selector must compete for scarce portfolio slots |
+| `risk.example.yaml -> risk.max_total_open_risk_fraction` | `1.0%` | prevents the watchlist model from becoming a correlation blow-up model |
 
 ## Data Layer
 
@@ -693,9 +809,10 @@ between a portfolio-aware intraday backtest and a naive loop over multiple CSVs.
 | Layer | Current implementation | Research role |
 | --- | --- | --- |
 | Canonical data | `1m` Binance history per symbol | one trusted source of truth |
+| Clock driver | profile-resolved lower timeframe | advances the event loop honestly |
 | Structural setup | `5m` execution profile | impulse, pullback, resumed imbalance |
 | Soft context | `15m` | regime interpretation and confidence shaping |
-| Micro trigger | `1m` inside the current `5m` bar | more precise entry timing without switching the event clock |
+| Micro trigger | `1m` on the true lower-timeframe clock | more precise entry timing without intrabar hindsight |
 | Portfolio gate | selector + risk caps | choose the best setup instead of all setups |
 | Gap guard | outage windows per symbol | block entries and force-flat around real history discontinuities |
 
@@ -703,13 +820,20 @@ The console surface for that runner is no longer limited to a static "it is
 running" message. During a historical pass, the backtest dashboard now switches
 from the preparation stage into a live execution heartbeat and exposes the
 actual simulated UTC timestamp, the corresponding configured local session time
-(`Europe/Berlin` by default), total execution-candle progress, steps per
+(`Europe/Berlin` by default), total clock-step progress, steps per
 second, estimated time remaining, current day trade count, current realized
 `R`, latest closed-trade timestamp, latest closed-trade `R`, and the most
 common rejection reasons accumulated so far. That distinction matters because a
 multi-year `5m` backtest can otherwise look inert while it is actually
 advancing normally through overnight candles where no new trade should be
 allowed. The dashboard is meant to make that state obvious.
+
+The backtest path now also respects the same event-clock honesty as the live
+and replay paths. A `5m` setup can arm on the `5m` close and then wait for a
+real `1m` trigger candle on the next valid lower-timeframe event. At the same
+time, management continues to live on the `5m` execution cadence. This split is
+what lets the codebase model faster entry timing without quietly inflating
+results through intrabar hindsight.
 
 When the local frontend dependencies are installed, `main_backtest.py` also
 tries to improve operator flow by opening the browser viewer automatically. If
@@ -848,16 +972,24 @@ The API layer should expose both request/response endpoints and a real-time
 WebSocket stream for candles, signals, trades, portfolio state, and health
 events.
 
-The frontend is no longer only a typed shell with mock pages. There is now a
-dedicated backtest review route under `frontend/app/backtest/` backed by a
-file-reading snapshot API in `frontend/app/api/backtest/snapshot/route.ts`.
-That route reads the live-growing `backtest/output` artifacts and renders a
-high-density review cockpit with a canvas-based execution-tape view, an equity
-pane, gap-window overlays, trade markers, trade distribution panels, and recent
-closed-trade / outage ledgers. It is not yet a full TradingView-class charting
-surface with deep zoom, synchronized multi-pane crosshair behavior, or full
-multi-year virtual scrolling, but it is now a real backtest operator view
-rather than a static mock.
+The frontend is no longer only a typed shell with mock pages. It now presents a
+coherent operator brand under `QuantFund AI`, starting with a simplified home
+route at `frontend/app/page.tsx` that acts as a mission-control hub into the
+research, replay, paper, and live surfaces. That root page is intentionally no
+longer a text-heavy scaffold. It uses a cleaner route-first layout, a compact
+workflow rail, and a generated cinematic hero asset stored under
+`frontend/public/brand/quantfund-ai-hero.png`.
+
+There is also a dedicated backtest review route under `frontend/app/backtest/`
+backed by a file-reading snapshot API in
+`frontend/app/api/backtest/snapshot/route.ts`. That route reads the live-growing
+`backtest/output` artifacts and renders a high-density review cockpit with a
+canvas-based execution-tape view, an equity pane, gap-window overlays, trade
+markers, trade distribution panels, and recent closed-trade / outage ledgers.
+It is not yet a full TradingView-class charting surface with deep zoom,
+synchronized multi-pane crosshair behavior, or full multi-year virtual
+scrolling, but it is now a real backtest operator view rather than a static
+mock.
 
 The frontend is now also aligned with the watchlist backtest architecture.
 `/backtest` is no longer forced to pretend that a portfolio run is one BTC
@@ -870,6 +1002,26 @@ chart. The page now separates:
 | `chart focus` | symbol-specific candle, volume, equity, trade-marker, and gap-window view |
 | `research control` | launch a backtest with a watchlist, choose a replay focus symbol, and jump between pages |
 | `PnL ledger` | aggregate closed-trade table with symbol-level visibility |
+
+The cockpit is also now aligned with the backend timing refactor. The UI no
+longer presents progress as if everything were simply a `5m` loop. The
+backtest snapshot contract now carries:
+
+| UI field | Meaning |
+| --- | --- |
+| `execution timeframe` | where structure and management live |
+| `clock timeframe` | what actually advances the historical event loop |
+| `trigger timeframe` | what must close for a new entry to be allowed |
+| `focus execution rows` | how much resampled chart data the selected symbol currently has |
+| `portfolio clock steps` | aggregate replay progress across the watchlist |
+
+The `/backtest` page itself was also cleaned up in the latest frontend pass.
+The layout now uses:
+
+- a more compact hero with less explanatory prose
+- chip-style anomaly and research-note surfaces instead of stacked warning blocks
+- a watchlist lane that shows full rationale only for the active symbol
+- a research-control deck that states the timing contract directly: `arm on execution, fire on trigger`
 
 ### Frontend Research Map
 
@@ -946,10 +1098,24 @@ Covered behaviors:
 - Binance spot broker parameter mapping preserves entry-side and reduce-only exit-side semantics
 - `MomentumScanner` recognizes a valid impulse-plus-pullback narrative
 - `PullbackScalpStrategy` emits a trade signal only when the trigger candle confirms
+- lower-timeframe trigger logic no longer mines earlier trigger candles from inside a finished execution bar
+- `TradingEngine` only advances management once per new execution close when the clock is faster than the execution frame
 - timeframe-profile resolution selects the correct execution expression
+- timeframe-profile resolution also derives the correct `clock_timeframe`
 - `RiskManager` sizes a trade from fixed account risk
+- notional-capped trades normalize `R` against the actual deployed risk rather than the pre-cap theoretical risk budget
 - `TrailingEngine` takes the first partial and moves the stop to breakeven
 - `ForwardRunner` bootstraps warm state, merges fresh `1m` candles, and writes operational checkpoints
+
+The latest backend suite now also includes explicit coverage for the no-lookahead
+timing contract:
+
+| Test file | What it proves |
+| --- | --- |
+| `backend/tests/test_engine_clock.py` | management cadence does not accelerate just because the clock is lower than execution |
+| `backend/tests/test_scanner_strategy.py` | lower-timeframe triggers are evaluated only on the current trigger candle after setup arming |
+| `backend/tests/test_multi_asset_replay.py` | multi-symbol replay batches step on the lower clock without inventing future visibility |
+| `backend/tests/test_risk_and_trailing.py` | `R` accounting stays correct after notional caps and partial/trailing logic |
 
 The current tests are intentionally focused on deterministic mechanics rather
 than exchange I/O. Network-heavy flows such as the public Binance downloader are
@@ -990,7 +1156,7 @@ instead of a fire-and-forget script collection.
 Test command:
 
 ```bash
-python -m unittest discover -s backend/tests -v
+python -m pytest backend/tests -q
 ```
 
 The command-line runners also now use Rich dashboards, so local environments
@@ -1120,7 +1286,7 @@ backend/app/config/risk.example.yaml
 Run the test suite:
 
 ```bash
-python -m unittest discover -s backend/tests -v
+python -m pytest backend/tests -q
 ```
 
 ### 5. Inspect the runtime entry points
@@ -1150,6 +1316,14 @@ disabled so the safety gate remains on until the operator explicitly chooses
 otherwise. `main_backtest.py` now also attempts to open the local `/backtest`
 viewer automatically when the frontend dependencies are already installed.
 
+If you use the current default watchlist config, `main_download_watchlist.py`
+and `main_backtest.py` now assume this evidence-pruned basket unless you
+override symbols explicitly:
+
+```text
+BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, LINKUSDT, XRPUSDT, AAVEUSDT, TRXUSDT
+```
+
 ### 6. Run the full historical research loop
 
 The most useful operator workflow is now:
@@ -1158,7 +1332,7 @@ The most useful operator workflow is now:
 | --- | --- | --- |
 | `A` | `python main_download_watchlist.py --start-date "2018-01-01 00:00:00" --end-date "2026-05-23 00:00:00"` | download canonical `1m` history for the configured watchlist |
 | `B` | `python main_data_audit.py --symbol BTCUSDT --start-date "2018-01-01 00:00:00" --end-date "2026-05-23 00:00:00" --strict` | verify one symbol end to end before trusting the whole set |
-| `C` | `python main_backtest.py --symbols BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,AVAXUSDT --start-date "2018-01-01 00:00:00" --end-date "2026-05-23 00:00:00"` | run the portfolio-aware watchlist backtest |
+| `C` | `python main_backtest.py --start-date "<common-watchlist-start>" --end-date "2026-05-23 00:00:00"` | run the config-driven evidence-pruned watchlist backtest from the earliest shared listing date you trust |
 | `D` | `cd frontend && npm run dev` | open the command-center UI |
 | `E` | open `http://localhost:3000/backtest` | inspect aggregate equity and symbol drilldown live |
 
@@ -1171,11 +1345,18 @@ Two practical notes:
    live file-backed monitor. It is reading the growing artifacts, not rerunning
    the engine itself.
 
-### 7. Inspect the frontend shell
+### 7. Inspect the frontend cockpit
 
-The frontend now includes a typed Next.js shell under `frontend/` with mock
-dashboard, replay, and portfolio pages, plus a real `/backtest` route backed by
-the filesystem snapshot API. To launch it:
+The frontend now includes a real Next.js operator cockpit under `frontend/`
+with:
+
+- a branded `QuantFund AI` mission-control home route
+- a live file-backed `/backtest` page
+- a replay workspace
+- paper/live forward dashboards
+- persistent navigation back to the root hub
+
+To launch it:
 
 ```bash
 cd frontend
