@@ -1027,15 +1027,15 @@ The layout now uses:
 
 ```mermaid
 flowchart TD
-    A[/] --> B[/backtest]
-    A --> C[/replay]
-    A --> D[/dashboard?mode=paper]
-    A --> E[/dashboard?mode=live]
-    B --> F[Aggregate portfolio state]
-    B --> G[Watchlist lane]
-    B --> H[Selected symbol chart]
-    B --> I[PnL ledger]
-    B --> C
+    home["/"] --> backtest["/backtest"]
+    home --> replay["/replay"]
+    home --> paper["/dashboard?mode=paper"]
+    home --> live["/dashboard?mode=live"]
+    backtest --> aggregate["Aggregate portfolio state"]
+    backtest --> watchlist["Watchlist lane"]
+    backtest --> focus["Selected symbol chart"]
+    backtest --> ledger["PnL ledger"]
+    backtest --> replay
 ```
 
 The important ergonomic principle is that the interface should feel like a
