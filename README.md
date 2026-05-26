@@ -155,12 +155,12 @@ earned, not because the trade has spent several candles above that level.
 ## High-Level Operating Model
 
 ```mermaid
-flowchart TD
-    A[Binance market data] --> B[Candle builder]
+flowchart TB
+    A[Binance market data]
+    A --> B[Candle builder]
     B --> C[Canonical 1m stream]
     C --> D[Resampler]
-    C --> E[Scanner engine]
-    D --> E
+    D --> E[Scanner engine]
     E --> F[Strategy engine]
     F --> G[Execution engine]
     G --> H[Risk and trailing engine]
@@ -1026,16 +1026,16 @@ The layout now uses:
 ### Frontend Research Map
 
 ```mermaid
-flowchart TD
-    home["/"] --> backtest["/backtest"]
-    home --> replay["/replay"]
-    home --> paper["/dashboard?mode=paper"]
-    home --> live["/dashboard?mode=live"]
+flowchart TB
+    home["/"]
+    home --> backtest["/backtest"]
     backtest --> aggregate["Aggregate portfolio state"]
-    backtest --> watchlist["Watchlist lane"]
-    backtest --> focus["Selected symbol chart"]
-    backtest --> ledger["PnL ledger"]
-    backtest --> replay
+    aggregate --> watchlist["Watchlist lane"]
+    watchlist --> focus["Selected symbol chart"]
+    focus --> ledger["PnL ledger"]
+    backtest --> replay["/replay"]
+    replay --> paper["/dashboard?mode=paper"]
+    paper --> live["/dashboard?mode=live"]
 ```
 
 The important ergonomic principle is that the interface should feel like a
