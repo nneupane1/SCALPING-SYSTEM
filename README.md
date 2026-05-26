@@ -124,33 +124,45 @@ earned, not because the trade has spent several candles above that level.
 
 ## Repository Map
 
-| Path | Responsibility |
+### Backend surfaces
+
+| Path | Purpose |
 | --- | --- |
-| `backend/app/config/` | System, strategy, and risk configuration |
-| `backend/app/core/` | Orchestration, event dispatch, shared runtime behavior |
-| `backend/app/console/` | Rich-powered operator dashboards for CLI commands |
-| `backend/app/data/` | Binance connectivity, candle building, resampling, and cache state |
-| `backend/app/scanner/` | Real-time market-state filtering and setup preconditions |
-| `backend/app/strategies/` | Strategy interfaces and pullback scalp logic |
-| `backend/app/execution/` | Broker adapters, order routing, and execution control |
-| `backend/app/risk/` | Position sizing, stop logic, trailing rules, and kill switches |
-| `backend/app/portfolio/` | Trade ledger, analytics, equity state, and journaling |
-| `backend/app/replay/` | Historical event playback and deterministic simulation |
-| `backend/app/live/` | Forward paper/live runners over fresh closed Binance data |
-| `backend/app/api/` | HTTP and WebSocket surfaces for the frontend |
-| `backend/app/backtest/` | Checkpointed historical runner and CSV output loggers |
-| `backend/tests/` | Backend tests for timing, state, and strategy behavior |
-| `frontend/app/` | Next.js application routes for dashboard, replay, and portfolio views |
-| `frontend/components/` | Reusable UI components such as charts, feeds, and stats panels |
-| `frontend/lib/` | Client-side API and WebSocket utilities |
-| `infra/` | Deployment assets such as containers, compose files, and environment templates |
-| `main_download.py` | CLI entry point for checkpointed Binance history downloads |
-| `main_download_watchlist.py` | CLI entry point for watchlist-wide checkpointed history downloads |
-| `main_resample.py` | CLI entry point for rebuilding higher timeframes from canonical `1m` data |
-| `main_paper.py` | CLI entry point for checkpointed forward paper-trading loops |
-| `main_live.py` | CLI entry point for checkpointed forward live-scanning loops |
-| `main_replay.py` | CLI entry point for checkpointed replay execution |
-| `main_backtest.py` | CLI entry point for checkpointed historical backtests |
+| `backend/app/config/` | runtime, strategy, and risk config |
+| `backend/app/core/` | orchestration, event flow, shared runtime behavior |
+| `backend/app/console/` | Rich CLI dashboards |
+| `backend/app/data/` | Binance I/O, candle building, resampling, cache state |
+| `backend/app/scanner/` | regime filters and setup preconditions |
+| `backend/app/strategies/` | strategy contracts and pullback scalp logic |
+| `backend/app/execution/` | broker adapters and order routing |
+| `backend/app/risk/` | sizing, stops, trailing, kill switches |
+| `backend/app/portfolio/` | ledger, analytics, equity, journaling |
+| `backend/app/replay/` | deterministic historical playback |
+| `backend/app/live/` | paper/live forward runners |
+| `backend/app/api/` | HTTP and WebSocket surfaces |
+| `backend/app/backtest/` | checkpointed historical runner and CSV outputs |
+| `backend/tests/` | timing, state, and strategy tests |
+
+### Frontend and infra
+
+| Path | Purpose |
+| --- | --- |
+| `frontend/app/` | Next.js cockpit routes |
+| `frontend/components/` | reusable charts, cards, and panels |
+| `frontend/lib/` | client/server snapshot and runtime helpers |
+| `infra/` | deployment assets and environment templates |
+
+### CLI entry points
+
+| Command file | Purpose |
+| --- | --- |
+| `main_download.py` | single-symbol checkpointed history download |
+| `main_download_watchlist.py` | watchlist-wide history download |
+| `main_resample.py` | rebuild higher timeframes from canonical `1m` |
+| `main_paper.py` | forward paper-trading loop |
+| `main_live.py` | forward live-scanning loop |
+| `main_replay.py` | replay execution |
+| `main_backtest.py` | historical backtest |
 
 ## High-Level Operating Model
 
@@ -191,30 +203,30 @@ frontend representation of those semantics.
 
 The most important changes are:
 
-| Area | What changed | Why it matters |
+| Area | Change | Impact |
 | --- | --- | --- |
-| Lower-timeframe trigger honesty | the engine now distinguishes `execution_timeframe`, `trigger_timeframe`, and `clock_timeframe` | removes the earlier intrabar hindsight path |
-| Backtest / replay stepping | historical engines now advance on the true resolved clock rather than assuming execution-timeframe stepping | lets a `5m` setup use a real `1m` trigger without lying about time |
-| Setup lifecycle | scanner decisions can now be armed at the execution close and evaluated later on the next valid trigger candle | makes trigger timing event-driven instead of retroactive |
-| Position management | `bars_held` and management decisions advance only on a new execution close, even if the clock is faster | keeps trade management consistent with the strategy’s execution frame |
-| Watchlist defaults | the research watchlist is now intentionally diversified and evidence-pruned | moves the system away from redundant alt-L1 clustering |
-| Backtest viewer contract | `/backtest` now exposes execution layer, clock layer, trigger layer, focus symbol, and evidence-pruning hints directly in the UI | prevents the frontend from presenting a fake “5m-only” narrative |
-| Brand shell | the frontend root and global dock now present the system as `QuantFund AI` | gives the operator cockpit one coherent product identity |
+| Lower-timeframe trigger honesty | separate `execution_timeframe`, `trigger_timeframe`, and `clock_timeframe` | removes intrabar hindsight |
+| Backtest / replay stepping | historical engines step on the resolved clock | honest `1m` trigger timing inside `5m` structure |
+| Setup lifecycle | setups arm on execution close and wait for trigger close | event-driven entries instead of retroactive ones |
+| Position management | `bars_held` advances only on a new execution close | management stays tied to the setup frame |
+| Watchlist defaults | the research basket is diversified and evidence-pruned | less redundant alt-L1 overlap |
+| Backtest viewer contract | `/backtest` exposes execution, clock, trigger, and focus-symbol context | no fake `5m`-only story |
+| Brand shell | the frontend root and global dock present `QuantFund AI` | one coherent cockpit identity |
 
 ### Current default research universe
 
 The current `system.example.yaml` watchlist is:
 
-| Bucket | Default symbol | Why it is in the universe |
+| Factor bucket | Symbol | Role |
 | --- | --- | --- |
-| Core beta | `BTCUSDT` | benchmark crypto beta and primary tape |
-| Smart-contract core | `ETHUSDT` | broad secondary leader and liquidity anchor |
-| Exchange-chain | `BNBUSDT` | exchange / BNB-chain factor |
-| High-beta L1 | `SOLUSDT` | fast expansion candidate without stacking multiple similar L1s |
-| Oracle / infra | `LINKUSDT` | infrastructure-style crypto factor |
-| Payments | `XRPUSDT` | different participation profile from core beta |
-| DeFi lending | `AAVEUSDT` | DeFi expression without overloading the universe |
-| Payments alt | `TRXUSDT` | alternate payments / flow bucket |
+| Core beta | `BTCUSDT` | primary benchmark tape |
+| Smart-contract core | `ETHUSDT` | liquid secondary leader |
+| Exchange-chain | `BNBUSDT` | BNB-chain / exchange factor |
+| High-beta L1 | `SOLUSDT` | expansion without stacking similar L1s |
+| Oracle / infra | `LINKUSDT` | infrastructure factor |
+| Payments | `XRPUSDT` | payments-flow expression |
+| DeFi lending | `AAVEUSDT` | DeFi credit expression |
+| Payments alt | `TRXUSDT` | alternate payments bucket |
 
 This is not presented as a claim that these assets are truly uncorrelated in an
 absolute sense. The point is narrower and more practical: the default universe
@@ -311,7 +323,7 @@ its place in the universe over a meaningful sample?”
 ### Watchlist Research Flow
 
 ```mermaid
-flowchart LR
+flowchart TB
     A[Watchlist symbols] --> B[Checkpointed 1m downloads]
     B --> C[Per-symbol resample 5m / 15m]
     C --> D[Merged multi-asset replay clock]
@@ -411,7 +423,7 @@ The new rule is stricter:
 ### Timing flow
 
 ```mermaid
-flowchart LR
+flowchart TB
     A[Canonical 1m candles] --> B[Closed 5m execution candle]
     B --> C[Scanner decision]
     C --> D[Armed setup]
@@ -468,17 +480,17 @@ The scaffold includes example YAML files under `backend/app/config/`.
 
 | File | Purpose |
 | --- | --- |
-| `system.example.yaml` | runtime mode, symbols, session windows, storage, and transport settings |
-| `system.example.yaml -> account` | initial equity and reporting currency; the current default base capital is `25,000 EUR` |
-| `system.example.yaml -> binance` | REST endpoints, WebSocket endpoints, retry, timeout, TLS, throttling, stream reconnect, and order reconciliation behavior |
-| `system.example.yaml -> history` | default historical research date range |
-| `system.example.yaml -> downloads` | partial-file and checkpoint policy for history downloads |
-| `system.example.yaml -> resample` | pandas resample semantics and incomplete-candle handling |
-| `system.example.yaml -> backtest / replay` | periodic checkpoint cadence and output locations |
-| `strategy.example.yaml` | scanner thresholds, setup definitions, and entry triggers |
-| `strategy.example.yaml -> filters.context` | soft `15m` context interpretation, confidence adjustments, and risk scaling |
-| `strategy.example.yaml -> profiles` | timeframe-specific scanner, trigger, and cadence expectations |
-| `risk.example.yaml` | risk per trade, partial rules, trailing rules, and daily guardrails |
+| `system.example.yaml` | mode, symbols, sessions, storage, transport |
+| `system.example.yaml -> account` | starting equity and reporting currency; default `25,000 EUR` |
+| `system.example.yaml -> binance` | REST/WS endpoints, retry, timeout, TLS, throttling, reconciliation |
+| `system.example.yaml -> history` | default research date range |
+| `system.example.yaml -> downloads` | partial-file and checkpoint policy |
+| `system.example.yaml -> resample` | resample semantics and incomplete-candle handling |
+| `system.example.yaml -> backtest / replay` | checkpoint cadence and output paths |
+| `strategy.example.yaml` | scanner thresholds, setup logic, triggers |
+| `strategy.example.yaml -> filters.context` | soft `15m` context and risk scaling |
+| `strategy.example.yaml -> profiles` | timeframe-specific scanner, trigger, cadence expectations |
+| `risk.example.yaml` | risk, partials, trailing, daily guardrails |
 
 Long-term configuration goals:
 
@@ -489,14 +501,14 @@ Long-term configuration goals:
 
 ### Current configuration defaults that matter operationally
 
-| Config area | Current default | Why it matters |
+| Config area | Default | Why it matters |
 | --- | --- | --- |
-| `system.example.yaml -> market.watchlist_symbols` | `BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, LINKUSDT, XRPUSDT, AAVEUSDT, TRXUSDT` | the default research basket is now diversified by design |
-| `system.example.yaml -> market.execution_timeframe` | `5m` | setups and management are still defined on `5m` by default |
-| `strategy.example.yaml -> profiles.5m.trigger.timeframe` | `1m` | entry confirmation now happens on a real lower-timeframe clock |
-| `strategy.example.yaml -> profiles.5m.cadence.expected_trades_per_day_*` | `8` to `12` | the research target is encoded as an expectation, not as a promise |
-| `risk.example.yaml -> risk.max_open_positions` | `2` | the selector must compete for scarce portfolio slots |
-| `risk.example.yaml -> risk.max_total_open_risk_fraction` | `1.0%` | prevents the watchlist model from becoming a correlation blow-up model |
+| `system.example.yaml -> market.watchlist_symbols` | `BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, LINKUSDT, XRPUSDT, AAVEUSDT, TRXUSDT` | diversified research basket |
+| `system.example.yaml -> market.execution_timeframe` | `5m` | setup and management frame |
+| `strategy.example.yaml -> profiles.5m.trigger.timeframe` | `1m` | real lower-timeframe trigger close |
+| `strategy.example.yaml -> profiles.5m.cadence.expected_trades_per_day_*` | `8` to `12` | encoded research target, not a promise |
+| `risk.example.yaml -> risk.max_open_positions` | `2` | portfolio slots stay scarce |
+| `risk.example.yaml -> risk.max_total_open_risk_fraction` | `1.0%` | correlation blow-up cap |
 
 ## Data Layer
 
@@ -997,11 +1009,11 @@ chart. The page now separates:
 
 | UI surface | Purpose |
 | --- | --- |
-| `portfolio scope` | total progress, aggregate equity, drawdown, session/quality/state breakdowns |
-| `watchlist lane` | one card per symbol with trades, win rate, total `R`, realized PnL, and latest close |
-| `chart focus` | symbol-specific candle, volume, equity, trade-marker, and gap-window view |
-| `research control` | launch a backtest with a watchlist, choose a replay focus symbol, and jump between pages |
-| `PnL ledger` | aggregate closed-trade table with symbol-level visibility |
+| `portfolio scope` | aggregate progress, equity, drawdown, session/quality/state breakdowns |
+| `watchlist lane` | one card per symbol with win rate, `R`, PnL, latest close |
+| `chart focus` | symbol-specific candles, volume, equity, trades, gap windows |
+| `research control` | launch backtest, pick replay focus, move between pages |
+| `PnL ledger` | closed-trade table with symbol visibility |
 
 The cockpit is also now aligned with the backend timing refactor. The UI no
 longer presents progress as if everything were simply a `5m` loop. The
@@ -1012,7 +1024,7 @@ backtest snapshot contract now carries:
 | `execution timeframe` | where structure and management live |
 | `clock timeframe` | what actually advances the historical event loop |
 | `trigger timeframe` | what must close for a new entry to be allowed |
-| `focus execution rows` | how much resampled chart data the selected symbol currently has |
+| `focus execution rows` | resampled chart depth for the selected symbol |
 | `portfolio clock steps` | aggregate replay progress across the watchlist |
 
 The `/backtest` page itself was also cleaned up in the latest frontend pass.
@@ -1331,9 +1343,9 @@ The most useful operator workflow is now:
 | Step | Command | Why |
 | --- | --- | --- |
 | `A` | `python main_download_watchlist.py --start-date "2018-01-01 00:00:00" --end-date "2026-05-23 00:00:00"` | download canonical `1m` history for the configured watchlist |
-| `B` | `python main_data_audit.py --symbol BTCUSDT --start-date "2018-01-01 00:00:00" --end-date "2026-05-23 00:00:00" --strict` | verify one symbol end to end before trusting the whole set |
-| `C` | `python main_backtest.py --start-date "<common-watchlist-start>" --end-date "2026-05-23 00:00:00"` | run the config-driven evidence-pruned watchlist backtest from the earliest shared listing date you trust |
-| `D` | `cd frontend && npm run dev` | open the command-center UI |
+| `B` | `python main_data_audit.py --symbol BTCUSDT --start-date "2018-01-01 00:00:00" --end-date "2026-05-23 00:00:00" --strict` | validate one symbol end to end before trusting the set |
+| `C` | `python main_backtest.py --start-date "<common-watchlist-start>" --end-date "2026-05-23 00:00:00"` | run the config-driven watchlist backtest from the shared listing date you trust |
+| `D` | `cd frontend && npm run dev` | open the operator UI |
 | `E` | open `http://localhost:3000/backtest` | inspect aggregate equity and symbol drilldown live |
 
 Two practical notes:
