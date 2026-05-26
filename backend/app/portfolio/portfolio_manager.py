@@ -32,15 +32,17 @@ class PortfolioManager:
         self.realized_pnl = 0.0
         self.peak_equity = starting_equity
         self.active_position: OpenPosition | None = None
+        self.active_positions_by_symbol: dict[str, OpenPosition] = {}
         self.closed_trades: list[ClosedTrade] = []
         self.win_count = 0
         self.loss_count = 0
         self.journal = journal
 
     def open_position(self, position: OpenPosition) -> None:
-        if self.active_position is not None:
-            raise ValueError("PortfolioManager currently supports a single active position.")
-        self.active_position = position
+        if position.symbol in self.active_positions_by_symbol:
+            raise ValueError(f"PortfolioManager already has an active position for {position.symbol}.")
+        self.active_positions_by_symbol[position.symbol] = position
+        self._refresh_active_position_alias()
         self.journal.record(
             "execution",
             "opened position",
@@ -56,9 +58,10 @@ class PortfolioManager:
 
     def sync_active_position(self, position: OpenPosition) -> None:
         if position.remaining_quantity <= 0:
-            self.active_position = None
+            self.active_positions_by_symbol.pop(position.symbol, None)
         else:
-            self.active_position = position
+            self.active_positions_by_symbol[position.symbol] = position
+        self._refresh_active_position_alias()
 
     def close_position(self, trade: ClosedTrade) -> None:
         self.closed_trades.append(trade)
@@ -69,7 +72,8 @@ class PortfolioManager:
             self.win_count += 1
         elif trade.realized_pnl < 0:
             self.loss_count += 1
-        self.active_position = None
+        self.active_positions_by_symbol.pop(trade.symbol, None)
+        self._refresh_active_position_alias()
         self.journal.record(
             "portfolio",
             "closed trade",
@@ -84,6 +88,24 @@ class PortfolioManager:
             quality=trade.metadata.get("setup_quality_label"),
         )
 
+    def position_for_symbol(self, symbol: str) -> OpenPosition | None:
+        return self.active_positions_by_symbol.get(symbol)
+
+    def active_positions(self) -> tuple[OpenPosition, ...]:
+        return tuple(self.active_positions_by_symbol.values())
+
+    @property
+    def open_position_count(self) -> int:
+        return len(self.active_positions_by_symbol)
+
+    def total_open_risk_amount(self) -> float:
+        return sum(position.initial_risk_amount for position in self.active_positions_by_symbol.values())
+
+    def total_open_risk_fraction(self) -> float:
+        if self.current_equity <= 0:
+            return 0.0
+        return self.total_open_risk_amount() / self.current_equity
+
     def snapshot(self) -> PortfolioSnapshot:
         drawdown = self.current_equity - self.peak_equity
         return PortfolioSnapshot(
@@ -96,6 +118,8 @@ class PortfolioManager:
             peak_equity=self.peak_equity,
             drawdown=drawdown,
             active_position=self.active_position,
+            active_positions=self.active_positions(),
+            open_position_count=self.open_position_count,
         )
 
     def build_day_summary(self, reference_time: datetime, timezone_name: str) -> DayPerformanceSummary:
@@ -119,3 +143,6 @@ class PortfolioManager:
             loss_count=sum(1 for trade in day_trades if trade.realized_pnl < 0),
             consecutive_losses=consecutive_losses,
         )
+
+    def _refresh_active_position_alias(self) -> None:
+        self.active_position = next(iter(self.active_positions_by_symbol.values()), None)

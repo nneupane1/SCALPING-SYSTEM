@@ -29,6 +29,16 @@ class EngineCycleResult:
     portfolio: PortfolioSnapshot
 
 
+@dataclass(frozen=True)
+class SignalEvaluationResult:
+    """Pre-execution decision bundle for one symbol snapshot."""
+
+    snapshot: MarketSnapshot
+    scanner_decision: ScannerDecision | None
+    signal: TradeSignal | None
+    portfolio: PortfolioSnapshot
+
+
 class TradingEngine:
     """Thin orchestrator that delegates decisions to specialized modules."""
 
@@ -58,29 +68,58 @@ class TradingEngine:
         """Run one full market-state evaluation pass."""
 
         self.event_bus.publish(Event(EventTopic.SNAPSHOT_READY, snapshot))
-        signal: TradeSignal | None = None
+        management_decisions = self.manage_snapshot(snapshot)
+        evaluation = self.evaluate_entry_candidate(snapshot, allow_new_entries=allow_new_entries)
+        signal = evaluation.signal
+        scanner_decision = evaluation.scanner_decision
         risk_plan: RiskPlan | None = None
-        scanner_decision: ScannerDecision | None = None
-        management_decisions: tuple[ManagementDecision, ...] = ()
+        if signal is not None:
+            risk_plan = self.execute_signal(signal)
+        portfolio = self.portfolio_manager.snapshot()
+        self.event_bus.publish(Event(EventTopic.PORTFOLIO_UPDATED, portfolio))
+        return EngineCycleResult(
+            snapshot=snapshot,
+            scanner_decision=scanner_decision,
+            signal=signal,
+            risk_plan=risk_plan,
+            management_decisions=management_decisions,
+            portfolio=portfolio,
+        )
 
-        active_position = self.portfolio_manager.active_position
+    def manage_snapshot(self, snapshot: MarketSnapshot) -> tuple[ManagementDecision, ...]:
         latest_candle = snapshot.latest(self.execution_timeframe)
-
-        if active_position is not None and latest_candle is not None:
-            management_decisions = self.trailing_engine.evaluate(
+        active_position = self.portfolio_manager.position_for_symbol(snapshot.symbol)
+        if active_position is None or latest_candle is None:
+            return ()
+        management_decisions = self.trailing_engine.evaluate(
+            position=active_position,
+            candles=snapshot.series(self.execution_timeframe),
+        )
+        for decision in management_decisions:
+            closed_trade = self.execution_engine.apply_management(
                 position=active_position,
-                candles=snapshot.series(self.execution_timeframe),
+                decision=decision,
+                occurred_at=latest_candle.close_time,
             )
-            for decision in management_decisions:
-                closed_trade = self.execution_engine.apply_management(
-                    position=active_position,
-                    decision=decision,
-                    occurred_at=latest_candle.close_time,
-                )
-                if closed_trade is not None:
-                    self.portfolio_manager.close_position(closed_trade)
-            self.portfolio_manager.sync_active_position(active_position)
-        elif latest_candle is not None and allow_new_entries:
+            if closed_trade is not None:
+                self.portfolio_manager.close_position(closed_trade)
+        self.portfolio_manager.sync_active_position(active_position)
+        return management_decisions
+
+    def evaluate_entry_candidate(
+        self,
+        snapshot: MarketSnapshot,
+        *,
+        allow_new_entries: bool = True,
+    ) -> SignalEvaluationResult:
+        scanner_decision: ScannerDecision | None = None
+        signal: TradeSignal | None = None
+        latest_candle = snapshot.latest(self.execution_timeframe)
+        if (
+            latest_candle is not None
+            and allow_new_entries
+            and self.portfolio_manager.position_for_symbol(snapshot.symbol) is None
+        ):
             scanner_decision = self.scanner.scan(snapshot)
             self.event_bus.publish(Event(EventTopic.SCANNER_UPDATED, scanner_decision))
             if scanner_decision.is_tradeable:
@@ -99,38 +138,51 @@ class TradingEngine:
                         )
                 if signal is not None:
                     signal = self._apply_day_feedback(signal=signal, occurred_at=latest_candle.close_time)
-                if signal is not None:
-                    self.event_bus.publish(Event(EventTopic.SIGNAL_EMITTED, signal))
-                    try:
-                        risk_plan = self.risk_manager.build_plan(
-                            signal=signal,
-                            equity=self.portfolio_manager.current_equity,
-                        )
-                        position = self.execution_engine.execute_signal(signal, risk_plan)
-                    except ValueError as exc:
-                        self.event_bus.publish(
-                            Event(
-                                EventTopic.HEALTH,
-                                {
-                                    "stage": "entry_validation",
-                                    "message": str(exc),
-                                },
-                            )
-                        )
-                    else:
-                        self.portfolio_manager.open_position(position)
-                        self.event_bus.publish(Event(EventTopic.ORDER_SUBMITTED, position))
-
         portfolio = self.portfolio_manager.snapshot()
-        self.event_bus.publish(Event(EventTopic.PORTFOLIO_UPDATED, portfolio))
-        return EngineCycleResult(
+        return SignalEvaluationResult(
             snapshot=snapshot,
             scanner_decision=scanner_decision,
             signal=signal,
-            risk_plan=risk_plan,
-            management_decisions=management_decisions,
             portfolio=portfolio,
         )
+
+    def execute_signal(self, signal: TradeSignal, *, risk_plan: RiskPlan | None = None) -> RiskPlan | None:
+        if self.portfolio_manager.open_position_count >= self.risk_manager.risk_config.risk.max_open_positions:
+            self.event_bus.publish(
+                Event(
+                    EventTopic.HEALTH,
+                    {
+                        "stage": "portfolio_guard",
+                        "message": (
+                            f"max open positions reached "
+                            f"({self.portfolio_manager.open_position_count}/"
+                            f"{self.risk_manager.risk_config.risk.max_open_positions})"
+                        ),
+                    },
+                )
+            )
+            return None
+        try:
+            resolved_risk_plan = risk_plan or self.risk_manager.build_plan(
+                signal=signal,
+                equity=self.portfolio_manager.current_equity,
+            )
+            position = self.execution_engine.execute_signal(signal, resolved_risk_plan)
+        except ValueError as exc:
+            self.event_bus.publish(
+                Event(
+                    EventTopic.HEALTH,
+                    {
+                        "stage": "entry_validation",
+                        "message": str(exc),
+                    },
+                )
+            )
+            return None
+        self.portfolio_manager.open_position(position)
+        self.event_bus.publish(Event(EventTopic.SIGNAL_EMITTED, signal))
+        self.event_bus.publish(Event(EventTopic.ORDER_SUBMITTED, position))
+        return resolved_risk_plan
 
     def _apply_day_feedback(self, *, signal: TradeSignal, occurred_at) -> TradeSignal | None:
         summary = self.portfolio_manager.build_day_summary(occurred_at, self.session_timezone)

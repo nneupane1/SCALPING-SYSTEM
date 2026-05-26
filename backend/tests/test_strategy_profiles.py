@@ -42,7 +42,9 @@ class StrategyProfileTests(unittest.TestCase):
                             "compression_lookback": 6,
                         },
                         "trigger": {
+                            "timeframe": "1m",
                             "require_breakout_close": True,
+                            "reference_lookback_bars": 6,
                             "min_close_position": 0.65,
                             "min_body_ratio": 1.15,
                             "stop_buffer_ratio": 0.04,
@@ -65,7 +67,9 @@ class StrategyProfileTests(unittest.TestCase):
                             "compression_lookback": 5,
                         },
                         "trigger": {
+                            "timeframe": "5m",
                             "require_breakout_close": True,
+                            "reference_lookback_bars": 5,
                             "min_close_position": 0.72,
                             "min_body_ratio": 1.25,
                             "stop_buffer_ratio": 0.05,
@@ -85,16 +89,19 @@ class StrategyProfileTests(unittest.TestCase):
         fallback = config.resolve_profile("30m")
 
         self.assertEqual("5m", rapid.execution_timeframe)
+        self.assertEqual("1m", rapid.trigger_timeframe)
         self.assertEqual(8, rapid.cadence.expected_trades_per_day_low)
         self.assertEqual(1.35, rapid.scanner.min_impulse_body_ratio)
         self.assertEqual("secondary", rapid.cadence.runner_emphasis)
 
         self.assertEqual("15m", slow.execution_timeframe)
+        self.assertEqual("5m", slow.trigger_timeframe)
         self.assertEqual(2, slow.cadence.expected_trades_per_day_low)
         self.assertEqual(1.6, slow.scanner.min_impulse_body_ratio)
         self.assertEqual("primary", slow.cadence.runner_emphasis)
 
         self.assertEqual("30m", fallback.execution_timeframe)
+        self.assertEqual("30m", fallback.trigger_timeframe)
         self.assertEqual(1.5, fallback.scanner.min_impulse_body_ratio)
         self.assertEqual("balanced", fallback.cadence.runner_emphasis)
 

@@ -13,6 +13,7 @@ import type {
   BacktestTrade,
   BreakdownStat,
   GapWindow,
+  SymbolPerformanceStat,
 } from "./backtest-types";
 
 type CsvRow = Record<string, string>;
@@ -27,6 +28,7 @@ type CheckpointRow = {
   resume_signature?: Record<string, unknown>;
   start_date?: string;
   symbol?: string;
+  symbols?: string[];
   updated_at?: string;
 };
 
@@ -196,6 +198,29 @@ function toHistoryPathLabel(value: string | null | undefined): string | null {
   return value.trim().replace(" ", "T").replaceAll(":", ".");
 }
 
+function parseScopeSymbols(checkpoint: CheckpointRow | null): string[] {
+  if (!checkpoint) {
+    return ["BTCUSDT"];
+  }
+  const explicit = Array.isArray(checkpoint.symbols)
+    ? checkpoint.symbols
+    : Array.isArray(checkpoint.resume_signature?.symbols)
+      ? (checkpoint.resume_signature?.symbols as string[])
+      : [];
+  const normalizedExplicit = explicit
+    .map((value) => String(value).trim().toUpperCase())
+    .filter(Boolean);
+  if (normalizedExplicit.length > 0) {
+    return [...new Set(normalizedExplicit)];
+  }
+  const scope = String(checkpoint.symbol ?? "BTCUSDT");
+  const split = scope.includes("__") ? scope.split("__") : [scope];
+  const normalized = split
+    .map((value) => value.trim().toUpperCase())
+    .filter(Boolean);
+  return normalized.length > 0 ? [...new Set(normalized)] : ["BTCUSDT"];
+}
+
 async function readLatestCheckpoint(repoRoot: string): Promise<CheckpointRow | null> {
   const checkpointDir = path.join(repoRoot, "backtest", "output", "_checkpoints");
   const stat = await getFileStat(checkpointDir);
@@ -263,7 +288,7 @@ async function findPriceFile(
 async function readPriceWindow(
   filePath: string | null,
   simulatedTime: string | null,
-  windowSize = 240,
+  windowSize = 480,
 ): Promise<BacktestCandle[]> {
   if (!filePath) {
     return [];
@@ -349,6 +374,7 @@ function parseTradeRows(rows: CsvRow[]): BacktestTrade[] {
 
 function parseGapRows(rows: CsvRow[]): GapWindow[] {
   return rows.map((row) => ({
+    symbol: row.symbol || "BTCUSDT",
     gapId: asNumber(row.gap_id),
     previousBaseTimestamp: row.previous_base_timestamp,
     nextBaseTimestamp: row.next_base_timestamp,
@@ -366,6 +392,49 @@ function parseGapRows(rows: CsvRow[]): GapWindow[] {
     forceFlatBeforeGap: asBoolean(row.force_flat_before_gap),
     postGapCooldownBars: asNumber(row.post_gap_cooldown_bars),
   }));
+}
+
+function buildSymbolBreakdown(trades: BacktestTrade[]): SymbolPerformanceStat[] {
+  const buckets = new Map<
+    string,
+    { trades: number; wins: number; totalR: number; realizedPnl: number; latestTradeAt: string | null }
+  >();
+  for (const trade of trades) {
+    const bucket = buckets.get(trade.symbol) ?? {
+      trades: 0,
+      wins: 0,
+      totalR: 0,
+      realizedPnl: 0,
+      latestTradeAt: null,
+    };
+    bucket.trades += 1;
+    bucket.totalR += trade.realizedR;
+    bucket.realizedPnl += trade.realizedPnl;
+    if (trade.realizedR > 0) {
+      bucket.wins += 1;
+    }
+    if (!bucket.latestTradeAt || utcMillis(trade.closedAt) > utcMillis(bucket.latestTradeAt)) {
+      bucket.latestTradeAt = trade.closedAt;
+    }
+    buckets.set(trade.symbol, bucket);
+  }
+
+  return [...buckets.entries()]
+    .map(([symbol, bucket]) => ({
+      symbol,
+      trades: bucket.trades,
+      winRate: bucket.trades ? bucket.wins / bucket.trades : 0,
+      avgR: bucket.trades ? bucket.totalR / bucket.trades : 0,
+      totalR: bucket.totalR,
+      realizedPnl: bucket.realizedPnl,
+      latestTradeAt: bucket.latestTradeAt,
+    }))
+    .sort((left, right) => {
+      if (right.totalR !== left.totalR) {
+        return right.totalR - left.totalR;
+      }
+      return left.symbol.localeCompare(right.symbol);
+    });
 }
 
 function buildBreakdown(
@@ -428,6 +497,8 @@ function buildSummary(
   trades: BacktestTrade[],
   equityRows: BacktestEquityPoint[],
   gapWindows: GapWindow[],
+  symbols: string[],
+  activeSymbol: string,
 ): BacktestSummaryView {
   const startingEquity =
     asNumber(checkpoint?.resume_signature?.starting_equity as number | undefined, 25_000);
@@ -440,9 +511,14 @@ function buildSummary(
     trades.length > 0 ? Math.max(...trades.map((trade) => trade.realizedR)) : 0;
   const worstTradeR =
     trades.length > 0 ? Math.min(...trades.map((trade) => trade.realizedR)) : 0;
+  const symbolBreakdown = buildSymbolBreakdown(trades);
+  const symbolScope = checkpoint?.symbol ?? symbols.join("__");
 
   return {
-    symbol: checkpoint?.symbol ?? "BTCUSDT",
+    symbol: symbolScope,
+    symbolScope,
+    symbols,
+    activeSymbol,
     executionTimeframe: checkpoint?.execution_timeframe ?? "5m",
     startDate: checkpoint?.start_date ?? null,
     endDate: checkpoint?.end_date ?? null,
@@ -456,6 +532,8 @@ function buildSummary(
     worstTradeR,
     maxDrawdown: computeMaxDrawdown(equityRows),
     gapWindows: gapWindows.length,
+    watchlistSize: symbols.length,
+    symbolBreakdown,
     sessionBreakdown: buildBreakdown(trades, (trade) => trade.sessionName || "no session"),
     qualityBreakdown: buildBreakdown(
       trades,
@@ -467,10 +545,14 @@ function buildSummary(
 
 function filterWindowTrades(
   trades: BacktestTrade[],
+  symbol: string,
   windowStart: number,
   windowEnd: number,
 ): BacktestTrade[] {
   return trades.filter((trade) => {
+    if (trade.symbol !== symbol) {
+      return false;
+    }
     const openedAt = utcMillis(trade.openedAt);
     const closedAt = utcMillis(trade.closedAt);
     return closedAt >= windowStart && openedAt <= windowEnd;
@@ -479,19 +561,28 @@ function filterWindowTrades(
 
 function filterWindowGaps(
   gapWindows: GapWindow[],
+  symbol: string,
   windowStart: number,
   windowEnd: number,
 ): GapWindow[] {
   return gapWindows.filter((gap) => {
+    if (gap.symbol !== symbol) {
+      return false;
+    }
     const gapStart = utcMillis(gap.missingStart);
     const gapEnd = utcMillis(gap.missingEnd);
     return gapEnd >= windowStart && gapStart <= windowEnd;
   });
 }
 
-export async function loadBacktestSnapshot(): Promise<BacktestSnapshot> {
+export async function loadBacktestSnapshot(selectedSymbol?: string | null): Promise<BacktestSnapshot> {
   const repoRoot = resolveRepoRoot();
   const checkpoint = await readLatestCheckpoint(repoRoot);
+  const symbols = parseScopeSymbols(checkpoint);
+  const requestedSymbol = selectedSymbol?.trim().toUpperCase() ?? "";
+  const activeSymbol = symbols.includes(requestedSymbol)
+    ? requestedSymbol
+    : symbols[0] ?? "BTCUSDT";
 
   const equityPath = path.join(repoRoot, "backtest", "output", "equity.csv");
   const tradesPath = path.join(repoRoot, "backtest", "output", "trades.csv");
@@ -506,31 +597,46 @@ export async function loadBacktestSnapshot(): Promise<BacktestSnapshot> {
   const equityRows = parseEquityRows(equityRowsRaw);
   const trades = parseTradeRows(tradeRowsRaw);
   const gapWindows = parseGapRows(gapRowsRaw);
-  const summary = buildSummary(checkpoint, trades, equityRows, gapWindows);
+  const summary = buildSummary(checkpoint, trades, equityRows, gapWindows, symbols, activeSymbol);
 
-  const symbol = summary.symbol;
   const executionTimeframe = summary.executionTimeframe;
   const simulatedTime = equityRows.at(-1)?.time ?? null;
-  const priceFile = await findPriceFile(
-    repoRoot,
-    symbol,
-    executionTimeframe,
-    summary.startDate,
-    summary.endDate,
+  const priceFiles = await Promise.all(
+    symbols.map(async (symbol) => ({
+      symbol,
+      filePath: await findPriceFile(
+        repoRoot,
+        symbol,
+        executionTimeframe,
+        summary.startDate,
+        summary.endDate,
+      ),
+    })),
   );
-  const [candles, totalRows] = await Promise.all([
-    readPriceWindow(priceFile, simulatedTime),
-    priceFile ? countDataRows(priceFile) : Promise.resolve(0),
-  ]);
-
+  const activePriceFile = priceFiles.find((entry) => entry.symbol === activeSymbol)?.filePath ?? null;
+  const counts = await Promise.all(
+    priceFiles.map(async ({ symbol, filePath }) => ({
+      symbol,
+      rows: filePath ? await countDataRows(filePath) : 0,
+    })),
+  );
+  const totalRows = counts.reduce((sum, entry) => sum + entry.rows, 0);
+  const chartRows = counts.find((entry) => entry.symbol === activeSymbol)?.rows ?? 0;
+  const candles = await readPriceWindow(activePriceFile, simulatedTime);
   const windowStart = candles.length ? utcMillis(candles[0].time) : 0;
   const windowEnd = candles.length ? utcMillis(candles.at(-1)!.time) : 0;
-  const windowTrades = candles.length ? filterWindowTrades(trades, windowStart, windowEnd) : [];
-  const windowGapWindows = candles.length ? filterWindowGaps(gapWindows, windowStart, windowEnd) : [];
+  const windowTrades = candles.length ? filterWindowTrades(trades, activeSymbol, windowStart, windowEnd) : [];
+  const windowGapWindows = candles.length ? filterWindowGaps(gapWindows, activeSymbol, windowStart, windowEnd) : [];
+  const recentTrades = trades.slice(-80).reverse();
 
   const anomalies: string[] = [];
-  if (!priceFile) {
-    anomalies.push("No resampled execution file found for the active backtest range.");
+  if (!activePriceFile) {
+    anomalies.push(`No resampled execution file found for ${activeSymbol} in the active backtest range.`);
+  }
+  if (symbols.length > 1) {
+    anomalies.push(
+      `Watchlist backtest active across ${symbols.length} symbols. Portfolio equity is aggregate; chart focus is ${activeSymbol}.`,
+    );
   }
   if (gapWindows.length > 0) {
     anomalies.push(
@@ -546,6 +652,7 @@ export async function loadBacktestSnapshot(): Promise<BacktestSnapshot> {
     progress: {
       nextIndex: asNumber(checkpoint?.next_index),
       totalRows,
+      chartRows,
       progressPct: totalRows ? asNumber(checkpoint?.next_index) / totalRows : 0,
       simulatedTime,
       checkpointUpdatedAt: checkpoint?.updated_at ?? null,
@@ -554,7 +661,7 @@ export async function loadBacktestSnapshot(): Promise<BacktestSnapshot> {
     summary,
     candles,
     equity: equityRows,
-    recentTrades: trades.slice(-18).reverse(),
+    recentTrades,
     windowTrades,
     gapWindows,
     windowGapWindows,

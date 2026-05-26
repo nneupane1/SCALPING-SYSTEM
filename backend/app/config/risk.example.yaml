@@ -1,11 +1,13 @@
 risk:
   risk_per_trade: 0.005
-  max_open_positions: 1
+  max_open_positions: 2
   max_daily_loss_r: 3.0
   max_consecutive_losses: 4
   max_trades_per_day: 15
+  max_total_open_risk_fraction: 0.01
   min_stop_distance_ratio: 0.0005
-  max_position_notional: 50000
+  max_position_notional: 25000
+  max_positions_per_symbol: 1
   minimum_closed_trades_for_day_scaling: 2
   good_day_threshold_r: 1.0
   good_day_risk_multiplier: 1.05

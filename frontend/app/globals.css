@@ -27,6 +27,14 @@ body {
   font-family: "Segoe UI", "Helvetica Neue", sans-serif;
 }
 
+.appFrame {
+  min-height: 100vh;
+}
+
+.appContent {
+  padding-top: 78px;
+}
+
 a {
   color: inherit;
   text-decoration: none;
@@ -139,8 +147,72 @@ a {
   gap: 10px;
 }
 
+.chartHeaderTools,
+.btChartHeaderTools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.chartTimeframeChip,
+.btTimeframeChip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 191, 99, 0.22);
+  background: rgba(255, 191, 99, 0.08);
+  color: #ffdba7;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.chartToolbar,
+.btChartToolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.chartToolbarGroup,
+.btChartToolbarGroup {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.toolButton,
+.btToolButton {
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(130, 171, 210, 0.18);
+  background: rgba(8, 15, 23, 0.84);
+  color: var(--text);
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease, opacity 120ms ease;
+}
+
+.toolButton:hover,
+.btToolButton:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 191, 99, 0.36);
+  background: rgba(15, 25, 37, 0.92);
+}
+
+.toolButton:disabled,
+.btToolButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .chartStage {
-  height: 320px;
+  min-height: 560px;
   border-radius: 18px;
   border: 1px solid rgba(130, 171, 210, 0.14);
   background:
@@ -159,6 +231,54 @@ a {
     linear-gradient(rgba(130, 171, 210, 0.08) 1px, transparent 1px),
     linear-gradient(90deg, rgba(130, 171, 210, 0.08) 1px, transparent 1px);
   background-size: 100% 54px, 72px 100%;
+}
+
+.chartCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 560px;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.chartCanvas.is-dragging {
+  cursor: grabbing;
+}
+
+.chartOverlay {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  max-width: calc(100% - 32px);
+}
+
+.chartOverlayCard,
+.chartTapeStats > div {
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(130, 171, 210, 0.14);
+  background: rgba(6, 13, 20, 0.8);
+  backdrop-filter: blur(16px);
+}
+
+.chartOverlayCard span,
+.chartTapeStats span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.chartTapeStats {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .chartBars {
@@ -222,6 +342,355 @@ a {
   background: rgba(9, 17, 27, 0.72);
 }
 
+.homeShell {
+  position: relative;
+  overflow: hidden;
+}
+
+.homeShell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 8% 16%, rgba(255, 177, 63, 0.18), transparent 23%),
+    radial-gradient(circle at 87% 12%, rgba(45, 212, 191, 0.16), transparent 22%),
+    radial-gradient(circle at 50% 100%, rgba(115, 159, 218, 0.08), transparent 24%);
+  mix-blend-mode: screen;
+}
+
+.homeHero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.8fr);
+  gap: 18px;
+  padding: 30px;
+  border-radius: 30px;
+  border: 1px solid rgba(110, 149, 188, 0.2);
+  background:
+    radial-gradient(circle at top left, rgba(255, 183, 74, 0.14), transparent 28%),
+    linear-gradient(135deg, rgba(6, 13, 20, 0.98), rgba(10, 18, 28, 0.9) 44%, rgba(17, 29, 43, 0.94));
+  box-shadow:
+    0 38px 120px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 0 0 1px rgba(255, 255, 255, 0.02);
+  position: relative;
+}
+
+.homeHero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.02), transparent),
+    repeating-linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.014) 0,
+      rgba(255, 255, 255, 0.014) 1px,
+      transparent 1px,
+      transparent 5px
+    );
+}
+
+.homeHeroLead,
+.homeCommandPanel {
+  position: relative;
+  z-index: 1;
+}
+
+.homeHeroLead {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+}
+
+.homeRibbon {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  width: fit-content;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 191, 99, 0.22);
+  background: rgba(255, 191, 99, 0.08);
+}
+
+.homeRibbonLabel,
+.homeRibbonText,
+.homePanelEyebrow,
+.homeRouteBadge,
+.homeSystemTile span,
+.homeCommandFooter span {
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.homeRibbonLabel {
+  color: #ffd080;
+}
+
+.homeRibbonText {
+  color: #a9c6df;
+}
+
+.homeRibbonDivider {
+  width: 1px;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.homeHero h1 {
+  margin: 0;
+  max-width: 11ch;
+  font-family: "Bahnschrift", "Aptos", "Segoe UI", sans-serif;
+  font-size: clamp(2.5rem, 5vw, 5.6rem);
+  line-height: 0.92;
+  letter-spacing: -0.05em;
+}
+
+.homeHeroCopy {
+  margin: 0;
+  max-width: 64ch;
+  color: #bed3e7;
+  font-size: 1.05rem;
+  line-height: 1.7;
+}
+
+.homeActionRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.homePrimaryLink,
+.homeSecondaryLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 0 18px;
+  border-radius: 999px;
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.homePrimaryLink {
+  border: 1px solid rgba(255, 190, 84, 0.3);
+  background: linear-gradient(90deg, rgba(255, 187, 77, 0.24), rgba(255, 187, 77, 0.12));
+  color: #ffe1b1;
+  box-shadow: 0 0 28px rgba(255, 187, 77, 0.14);
+}
+
+.homeSecondaryLink {
+  border: 1px solid rgba(89, 220, 183, 0.24);
+  background: rgba(45, 212, 191, 0.08);
+  color: #baf5e9;
+}
+
+.homePrimaryLink:hover,
+.homeSecondaryLink:hover,
+.homeRouteCard:hover {
+  transform: translateY(-2px);
+}
+
+.homeCommandPanel,
+.homeStatementPanel,
+.homeSignalPanel {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(110, 149, 188, 0.16);
+  background:
+    linear-gradient(180deg, rgba(11, 19, 28, 0.94), rgba(7, 13, 20, 0.9)),
+    rgba(7, 13, 20, 0.9);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.homeCommandHeader,
+.homePanelHeader {
+  display: grid;
+  gap: 4px;
+}
+
+.homeCommandHeader strong,
+.homePanelHeader h3 {
+  font-family: "Bahnschrift", "Aptos", "Segoe UI", sans-serif;
+  font-size: 1.3rem;
+}
+
+.homeCommandList,
+.homeStatementList {
+  display: grid;
+  gap: 10px;
+}
+
+.homeCommandRow {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(110, 149, 188, 0.12);
+  background: rgba(6, 12, 18, 0.72);
+  overflow: hidden;
+}
+
+.homePrompt {
+  color: #67f1be;
+  font-weight: 700;
+}
+
+.homeCommandRow code {
+  color: #e6f1fb;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.homeCommandFooter {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.homeCommandFooter > div,
+.homeSystemTile,
+.homeSignalCard,
+.homeStatementRow,
+.homeRouteCard {
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(110, 149, 188, 0.12);
+  background: rgba(8, 14, 22, 0.74);
+}
+
+.homeCommandFooter strong,
+.homeSystemTile strong,
+.homeSignalCard strong,
+.homeRouteCard h2,
+.homeStatementRow strong {
+  display: block;
+}
+
+.homeTickerBand {
+  overflow: hidden;
+  border-radius: 18px;
+  border: 1px solid rgba(110, 149, 188, 0.16);
+  background:
+    linear-gradient(90deg, rgba(255, 191, 99, 0.08), rgba(45, 212, 191, 0.06)),
+    rgba(8, 14, 22, 0.82);
+}
+
+.homeTicker {
+  display: flex;
+  gap: 30px;
+  padding: 14px 18px;
+  white-space: nowrap;
+  color: #d7e6f5;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 12px;
+}
+
+.homeTicker span::before {
+  content: "•";
+  display: inline-block;
+  margin-right: 10px;
+  color: #ffd080;
+}
+
+.homeSystemStrip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.homeSystemTile strong {
+  margin: 8px 0 6px;
+  font-size: 1.8rem;
+  color: #f3f8ff;
+}
+
+.homeSystemTile p,
+.homeRouteCard p,
+.homeStatementRow p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.homeRouteGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.homeRouteCard {
+  display: grid;
+  gap: 12px;
+  text-decoration: none;
+  transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.homeRouteCard:hover {
+  border-color: rgba(255, 191, 99, 0.28);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.22);
+}
+
+.homeRouteTop,
+.homeRouteFoot {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.homeRouteCard h2 {
+  margin: 0;
+  font-family: "Bahnschrift", "Aptos", "Segoe UI", sans-serif;
+  font-size: 1.45rem;
+}
+
+.homeRouteBadge {
+  color: #a7e9db;
+}
+
+.homeRouteFoot span,
+.homeRouteFoot strong {
+  color: #d7e6f5;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.homeLowerGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+  gap: 16px;
+}
+
+.homeStatementList,
+.homeSignalGrid {
+  display: grid;
+  gap: 10px;
+}
+
+.homeSignalGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.homeSignalCard span {
+  color: #9fb9cf;
+}
+
+.homeSignalCard strong {
+  margin-top: 8px;
+  line-height: 1.45;
+}
+
 @media (max-width: 960px) {
   .grid.two,
   .grid.three {
@@ -233,7 +702,20 @@ a {
   }
 
   .chartStage {
-    height: 240px;
+    min-height: 340px;
+  }
+
+  .homeHero,
+  .homeSystemStrip,
+  .homeRouteGrid,
+  .homeLowerGrid,
+  .homeSignalGrid,
+  .homeCommandFooter {
+    grid-template-columns: 1fr;
+  }
+
+  .homeHero {
+    padding: 22px;
   }
 }
 
@@ -742,6 +1224,396 @@ a {
   text-align: center;
 }
 
+.modeRail {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.modeRailLink {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(108, 144, 180, 0.16);
+  background: rgba(8, 15, 23, 0.78);
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.modeRailLink span {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.modeRailLink strong {
+  color: var(--text);
+}
+
+.modeRailLink:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 191, 99, 0.28);
+}
+
+.modeRailLink.is-active {
+  border-color: rgba(255, 191, 99, 0.36);
+  background:
+    linear-gradient(135deg, rgba(255, 191, 99, 0.12), rgba(45, 212, 191, 0.08)),
+    rgba(8, 15, 23, 0.86);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.18);
+}
+
+.globalHomeDock {
+  position: fixed;
+  top: 14px;
+  left: 24px;
+  right: 24px;
+  z-index: 40;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(108, 144, 180, 0.16);
+  background:
+    linear-gradient(135deg, rgba(8, 14, 22, 0.94), rgba(11, 19, 29, 0.88)),
+    rgba(8, 14, 22, 0.9);
+  backdrop-filter: blur(18px);
+  box-shadow:
+    0 18px 60px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.globalHomeBrand,
+.globalHomeActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.globalHomeBrand span,
+.globalRoutePill {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.globalHomeBrand strong {
+  font-family: "Bahnschrift", "Aptos", "Segoe UI", sans-serif;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+}
+
+.globalRoutePill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(108, 144, 180, 0.14);
+  background: rgba(6, 13, 20, 0.72);
+}
+
+.globalHomeLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 191, 99, 0.26);
+  background: linear-gradient(90deg, rgba(255, 191, 99, 0.18), rgba(45, 212, 191, 0.08));
+  color: #ffe2b3;
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.globalHomeLink:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 191, 99, 0.4);
+}
+
+.globalHomeLink.is-home {
+  border-color: rgba(45, 212, 191, 0.22);
+  background: rgba(45, 212, 191, 0.08);
+  color: #b7f3e6;
+}
+
+.researchDock {
+  display: grid;
+  gap: 16px;
+}
+
+.researchGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.researchField {
+  display: grid;
+  gap: 8px;
+}
+
+.researchField span,
+.researchMetaCard span {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.researchInput {
+  min-height: 46px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(108, 144, 180, 0.16);
+  background: rgba(8, 15, 23, 0.88);
+  color: var(--text);
+  outline: none;
+}
+
+.researchInput:focus {
+  border-color: rgba(255, 191, 99, 0.34);
+  box-shadow: 0 0 0 1px rgba(255, 191, 99, 0.18);
+}
+
+.researchMetaRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.researchMetaCard,
+.replaySliderWrap {
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(108, 144, 180, 0.14);
+  background: rgba(8, 15, 23, 0.76);
+}
+
+.researchMetaCard strong {
+  display: block;
+  margin-top: 6px;
+}
+
+.researchActionRow,
+.replayTransport {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.researchPrimaryButton,
+.researchSecondaryButton,
+.researchGhostButton {
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(108, 144, 180, 0.16);
+  color: var(--text);
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease, opacity 120ms ease;
+}
+
+.researchPrimaryButton {
+  background: linear-gradient(90deg, rgba(255, 191, 99, 0.24), rgba(255, 191, 99, 0.11));
+  border-color: rgba(255, 191, 99, 0.28);
+  color: #ffe2b3;
+}
+
+.researchSecondaryButton {
+  background: rgba(45, 212, 191, 0.08);
+  border-color: rgba(45, 212, 191, 0.22);
+  color: #b7f3e6;
+}
+
+.researchGhostButton {
+  background: rgba(8, 15, 23, 0.86);
+}
+
+.researchPrimaryButton:hover,
+.researchSecondaryButton:hover,
+.researchGhostButton:hover {
+  transform: translateY(-1px);
+}
+
+.researchPrimaryButton:disabled,
+.researchSecondaryButton:disabled,
+.researchGhostButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.researchFooter {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.researchFooter strong {
+  color: #ffe2b3;
+}
+
+.researchSpeedSelect {
+  min-width: 120px;
+}
+
+.replaySliderWrap {
+  display: grid;
+  gap: 10px;
+}
+
+.replaySliderMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.replaySliderMeta strong {
+  color: #ffd69b;
+}
+
+.replaySlider {
+  width: 100%;
+  accent-color: #ffbf63;
+}
+
+.ledgerWrap {
+  overflow-x: auto;
+  border-radius: 18px;
+  border: 1px solid rgba(108, 144, 180, 0.12);
+  background: rgba(8, 15, 23, 0.72);
+}
+
+.ledgerTable {
+  min-width: 1040px;
+}
+
+.ledgerHead,
+.ledgerRow {
+  display: grid;
+  grid-template-columns: 1.35fr 0.9fr 0.7fr 0.9fr 0.9fr 1fr 0.8fr 1fr 1fr 1fr 0.65fr;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+}
+
+.ledgerHead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgba(5, 11, 17, 0.92);
+  border-bottom: 1px solid rgba(108, 144, 180, 0.12);
+}
+
+.ledgerHead span {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.ledgerRow {
+  border-top: 1px solid rgba(108, 144, 180, 0.08);
+}
+
+.ledgerRow span,
+.ledgerRow strong {
+  white-space: nowrap;
+}
+
+.btSymbolNavigator {
+  display: grid;
+  gap: 16px;
+}
+
+.btSymbolGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+.btSymbolCard {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  text-align: left;
+  border-radius: 18px;
+  border: 1px solid rgba(108, 144, 180, 0.14);
+  background:
+    radial-gradient(circle at top right, rgba(45, 212, 191, 0.08), transparent 44%),
+    linear-gradient(180deg, rgba(13, 23, 34, 0.92), rgba(8, 15, 23, 0.82));
+  color: var(--text);
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    background 140ms ease;
+}
+
+.btSymbolCard:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 191, 99, 0.28);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.18);
+}
+
+.btSymbolCard.is-active {
+  border-color: rgba(255, 191, 99, 0.34);
+  background:
+    radial-gradient(circle at top right, rgba(255, 191, 99, 0.12), transparent 40%),
+    linear-gradient(180deg, rgba(20, 29, 40, 0.96), rgba(8, 15, 23, 0.84));
+  box-shadow:
+    0 20px 54px rgba(0, 0, 0, 0.22),
+    inset 0 0 0 1px rgba(255, 191, 99, 0.08);
+}
+
+.btSymbolTop,
+.btSymbolFoot,
+.btSymbolStats {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.btSymbolTop strong {
+  font-size: 1rem;
+  letter-spacing: 0.04em;
+}
+
+.btSymbolTop span,
+.btSymbolFoot span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.btSymbolStats span {
+  font-size: 13px;
+}
+
+.btSymbolFoot strong {
+  color: #ffd69b;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 @media (max-width: 1280px) {
   .btMetricDeck,
   .btGridSecondary {
@@ -754,18 +1626,35 @@ a {
 }
 
 @media (max-width: 960px) {
+  .modeRail,
   .btHero,
   .btMetricDeck,
   .btGridSecondary,
+  .researchGrid,
+  .researchMetaRow,
+  .chartTapeStats,
   .btTapeStats,
   .btStatementGrid {
     grid-template-columns: 1fr;
+  }
+
+  .appContent {
+    padding-top: 112px;
+  }
+
+  .globalHomeDock {
+    left: 16px;
+    right: 16px;
+    top: 12px;
+    align-items: flex-start;
   }
 
   .btHero {
     padding: 20px;
   }
 
+  .chartCanvas,
+  .chartStage,
   .btCanvas,
   .btCanvas-short,
   .btCinemaFrame,

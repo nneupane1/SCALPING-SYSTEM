@@ -4,6 +4,7 @@ export type CandlePoint = {
   high: number;
   low: number;
   close: number;
+  volume?: number;
 };
 
 export type SignalView = {
@@ -65,4 +66,3 @@ export type DashboardSnapshot = {
   reasoning: ReasoningLine[];
   heatmap: HeatmapCell[];
 };
-

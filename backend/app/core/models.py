@@ -216,6 +216,8 @@ class PortfolioSnapshot:
     peak_equity: float
     drawdown: float
     active_position: OpenPosition | None
+    active_positions: tuple[OpenPosition, ...] = ()
+    open_position_count: int = 0
 
     @property
     def win_rate(self) -> float:

@@ -4,27 +4,36 @@ from __future__ import annotations
 
 from collections import defaultdict
 from bisect import bisect_left, bisect_right
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from statistics import median
 from time import perf_counter
 from zoneinfo import ZoneInfo
 
 from backend.app.config.models import ConfigBundle, history_path_label
-from backend.app.core import JsonCheckpointStore
+from backend.app.core import EngineCycleResult, JsonCheckpointStore
 from backend.app.core.events import Event, EventTopic
 from backend.app.core.models import ManagementAction, ManagementDecision
 from backend.app.core.orchestrator import build_runtime
 from backend.app.data import MarketDataDownloader, TimeframeBuilder, dataframe_to_candles
-from backend.app.replay import ReplayEngine
+from backend.app.portfolio.signal_selector import SignalSelector
+from backend.app.replay import MultiAssetReplayEngine
 
-from .csv_logger import EquityCsvLogger, GapCsvLogger, TradeCsvLogger
+from .csv_logger import (
+    DailySummaryCsvLogger,
+    DiagnosticsJsonLogger,
+    EquityCsvLogger,
+    GapCsvLogger,
+    TradeCsvLogger,
+)
 
 
 @dataclass(frozen=True)
 class BacktestGapWindow:
     """One detected historical outage window mapped into execution-candle space."""
 
+    symbol: str
     gap_id: int
     previous_base_timestamp: datetime
     next_base_timestamp: datetime
@@ -102,10 +111,13 @@ class BacktestRunner:
         self,
         *,
         symbol: str | None = None,
+        symbols: tuple[str, ...] | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
     ) -> BacktestSummary:
-        symbol = (symbol or self.config.system.market.symbol).upper()
+        symbols = self._resolve_symbols(symbol=symbol, symbols=symbols)
+        symbol_label = ", ".join(symbols)
+        symbol_scope = self._symbol_scope_label(symbols)
         start_date = start_date or self.config.system.history.start_date
         end_date = end_date or self.config.system.history.end_date
         execution_timeframe = self.config.system.market.execution_timeframe
@@ -113,43 +125,67 @@ class BacktestRunner:
             "phase",
             status="running",
             phase="preparing backtest",
-            detail=f"{symbol} | {start_date} -> {end_date}",
+            detail=f"{symbol_label} | {start_date} -> {end_date}",
         )
 
-        df_1m = self.downloader.fetch_full_history(
-            symbol=symbol,
-            interval=self.config.system.market.base_timeframe,
-            start_date=start_date,
-            end_date=end_date,
-        )
-        frames = self.timeframe_builder.build_timeframes_and_save(
-            df_1m,
-            symbol=symbol,
-            start_date=start_date,
-            end_date=end_date,
-        )
-        candles_by_timeframe = {
-            timeframe: dataframe_to_candles(
-                frame,
-                symbol=symbol,
-                timeframe=timeframe,
-                index_is_close_time=(timeframe != self.config.system.market.base_timeframe),
+        candles_by_symbol: dict[str, dict[str, tuple]] = {}
+        gap_windows_all: list[BacktestGapWindow] = []
+        gap_policies_by_symbol: dict[str, dict[int, GapStepPolicy]] = {}
+        for active_symbol in symbols:
+            df_1m = self.downloader.fetch_full_history(
+                symbol=active_symbol,
+                interval=self.config.system.market.base_timeframe,
+                start_date=start_date,
+                end_date=end_date,
             )
-            for timeframe, frame in frames.items()
-        }
-        execution_series = candles_by_timeframe.get(execution_timeframe, ())
-        gap_windows, gap_policies = self._build_gap_policy(
-            df_1m=df_1m,
-            execution_series=execution_series,
-            execution_timeframe=execution_timeframe,
-        )
+            frames = self.timeframe_builder.build_timeframes_and_save(
+                df_1m,
+                symbol=active_symbol,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            candles_by_timeframe = {
+                timeframe: dataframe_to_candles(
+                    frame,
+                    symbol=active_symbol,
+                    timeframe=timeframe,
+                    index_is_close_time=(timeframe != self.config.system.market.base_timeframe),
+                )
+                for timeframe, frame in frames.items()
+            }
+            candles_by_symbol[active_symbol] = candles_by_timeframe
+            execution_series = candles_by_timeframe.get(execution_timeframe, ())
+            gap_windows, gap_policies = self._build_gap_policy(
+                symbol=active_symbol,
+                df_1m=df_1m,
+                execution_series=execution_series,
+                execution_timeframe=execution_timeframe,
+            )
+            gap_windows_all.extend(gap_windows)
+            gap_policies_by_symbol[active_symbol] = gap_policies
 
         runtime = build_runtime(self.config)
+        selector = SignalSelector(
+            portfolio_manager=runtime.portfolio_manager,
+            risk_manager=runtime.engine.risk_manager,
+        )
         rejection_counts: dict[str, int] = defaultdict(int)
+        scanner_state_counts: dict[str, int] = defaultdict(int)
+        accepted_signal_counts: dict[str, int] = defaultdict(int)
+        accepted_quality_counts: dict[str, int] = defaultdict(int)
+        accepted_session_counts: dict[str, int] = defaultdict(int)
+        accepted_market_state_counts: dict[str, int] = defaultdict(int)
         runtime.event_bus.subscribe(
             EventTopic.SCANNER_UPDATED,
             lambda event: self._register_scanner_rejection(
                 rejection_counts=rejection_counts,
+                payload=event.payload,
+            ),
+        )
+        runtime.event_bus.subscribe(
+            EventTopic.SCANNER_UPDATED,
+            lambda event: self._register_scanner_state(
+                scanner_state_counts=scanner_state_counts,
                 payload=event.payload,
             ),
         )
@@ -160,10 +196,19 @@ class BacktestRunner:
                 payload=event.payload,
             ),
         )
-        replay_engine = ReplayEngine(
-            symbol=symbol,
+        runtime.event_bus.subscribe(
+            EventTopic.SIGNAL_EMITTED,
+            lambda event: self._register_signal_acceptance(
+                accepted_signal_counts=accepted_signal_counts,
+                accepted_quality_counts=accepted_quality_counts,
+                accepted_session_counts=accepted_session_counts,
+                accepted_market_state_counts=accepted_market_state_counts,
+                payload=event.payload,
+            ),
+        )
+        replay_engine = MultiAssetReplayEngine(
             execution_timeframe=execution_timeframe,
-            candles_by_timeframe=candles_by_timeframe,
+            candles_by_symbol=candles_by_symbol,
         )
 
         backtest_cfg = self.config.system.backtest
@@ -172,7 +217,7 @@ class BacktestRunner:
             output_dir
             / backtest_cfg.checkpoint_dir
             / (
-                f"{symbol}_{execution_timeframe}_{history_path_label(start_date)}"
+                f"{symbol_scope}_{execution_timeframe}_{history_path_label(start_date)}"
                 f"_to_{history_path_label(end_date)}{backtest_cfg.checkpoint_suffix}"
             )
         )
@@ -180,9 +225,11 @@ class BacktestRunner:
         trade_logger = TradeCsvLogger(output_dir / "trades.csv")
         equity_logger = EquityCsvLogger(output_dir / "equity.csv")
         gap_logger = GapCsvLogger(output_dir / "gap_windows.csv")
+        daily_summary_logger = DailySummaryCsvLogger(output_dir / "daily_summary.csv")
+        diagnostics_logger = DiagnosticsJsonLogger(output_dir / "diagnostics.json")
 
         checkpoint = checkpoint_store.read() if backtest_cfg.resume_enabled else None
-        resume_signature = self._resume_signature(symbol=symbol, execution_timeframe=execution_timeframe)
+        resume_signature = self._resume_signature(symbols=symbols, execution_timeframe=execution_timeframe)
         if checkpoint and not self._checkpoint_compatible(checkpoint=checkpoint, resume_signature=resume_signature):
             self._log("Ignoring incompatible backtest checkpoint and starting fresh state.", level="warning")
             checkpoint = None
@@ -192,7 +239,7 @@ class BacktestRunner:
         if backtest_cfg.output_gap_windows:
             gap_logger.initialize(resume=resume)
             if not (resume and gap_logger.path.exists()):
-                gap_logger.write_all(gap_windows)
+                gap_logger.write_all(gap_windows_all)
 
         resume_index = int(checkpoint.get("next_index", 0)) if resume and checkpoint else 0
         gap_blocked_steps = 0
@@ -202,12 +249,13 @@ class BacktestRunner:
             gap_blocked_steps, gap_forced_exits = self._fast_forward(
                 replay_engine=replay_engine,
                 runtime=runtime,
-                gap_policies=gap_policies,
+                selector=selector,
+                gap_policies_by_symbol=gap_policies_by_symbol,
                 steps=resume_index,
             )
 
         save_every = max(1, backtest_cfg.save_every_steps)
-        total_steps = len(execution_series)
+        total_steps = replay_engine.total_steps
         update_stride = max(1, total_steps // 1000) if total_steps else 1
         simulated_start = self._parse_history_timestamp(start_date)
         simulated_end = self._parse_history_timestamp(end_date)
@@ -218,14 +266,14 @@ class BacktestRunner:
             status="running",
             phase="running backtest",
             detail=(
-                f"{symbol} {execution_timeframe} | "
+                f"{symbol_scope} {execution_timeframe} | "
                 f"{total_steps:,} execution candles | "
                 f"starting at step {resume_index:,}"
             ),
         )
         self._emit(
             "progress",
-            description=f"Backtesting {symbol} {execution_timeframe}",
+            description=f"Backtesting {symbol_scope} {execution_timeframe}",
             completed=resume_index,
             total=total_steps,
             status="running",
@@ -233,7 +281,7 @@ class BacktestRunner:
         self._emit(
             "metrics",
             metrics=self._build_runtime_metrics(
-                symbol=symbol,
+                symbol=symbol_scope,
                 start_date=start_date,
                 end_date=end_date,
                 total_steps=total_steps,
@@ -244,7 +292,7 @@ class BacktestRunner:
                 eta_seconds=None,
                 runtime=runtime,
                 latest_trade=None,
-                gap_windows=len(gap_windows),
+                gap_windows=len(gap_windows_all),
                 gap_blocked_steps=gap_blocked_steps,
                 gap_forced_exits=gap_forced_exits,
                 rejection_counts=rejection_counts,
@@ -252,44 +300,44 @@ class BacktestRunner:
         )
         while replay_engine.has_next():
             closed_before = len(runtime.portfolio_manager.closed_trades)
-            result, policy, forced_exit = self._advance_one_step(
+            batch_results, batch_blocked_steps, batch_forced_exits = self._advance_batch(
                 replay_engine=replay_engine,
                 runtime=runtime,
-                gap_policies=gap_policies,
+                selector=selector,
+                gap_policies_by_symbol=gap_policies_by_symbol,
                 emit_gap_events=True,
             )
-            if result is None:
+            if not batch_results:
                 break
-            if policy is not None:
-                gap_blocked_steps += 1
-            if forced_exit:
-                gap_forced_exits += 1
+            gap_blocked_steps += batch_blocked_steps
+            gap_forced_exits += batch_forced_exits
             closed_after = len(runtime.portfolio_manager.closed_trades)
             if closed_after > closed_before:
                 for trade in runtime.portfolio_manager.closed_trades[closed_before:closed_after]:
                     trade_logger.append(trade)
+            latest_result = batch_results[-1]
             equity_logger.append(
-                timestamp=result.snapshot.generated_at.isoformat(),
+                timestamp=latest_result.snapshot.generated_at.isoformat(),
                 equity=runtime.portfolio_manager.current_equity,
             )
             now = perf_counter()
             should_refresh = (
-                replay_engine.cursor.index % update_stride == 0
-                or replay_engine.cursor.index == total_steps
+                replay_engine.cursor.processed_steps % update_stride == 0
+                or replay_engine.cursor.processed_steps == total_steps
                 or closed_after > closed_before
                 or now - last_ui_update_at >= 1.0
             )
             if should_refresh:
                 elapsed_seconds = max(1e-9, now - loop_started_at)
-                processed_since_loop_start = max(0, replay_engine.cursor.index - resume_index)
+                processed_since_loop_start = max(0, replay_engine.cursor.processed_steps - resume_index)
                 steps_per_second = processed_since_loop_start / elapsed_seconds
-                remaining_steps = max(0, total_steps - replay_engine.cursor.index)
+                remaining_steps = max(0, total_steps - replay_engine.cursor.processed_steps)
                 eta_seconds = (
                     remaining_steps / steps_per_second
                     if steps_per_second > 0
                     else None
                 )
-                simulated_at = result.snapshot.generated_at
+                simulated_at = latest_result.snapshot.generated_at
                 simulated_progress = self._progress_ratio(
                     current=simulated_at,
                     start=simulated_start,
@@ -302,8 +350,8 @@ class BacktestRunner:
                 )
                 self._emit(
                     "progress",
-                    description=f"Backtesting {symbol} {execution_timeframe}",
-                    completed=replay_engine.cursor.index,
+                    description=f"Backtesting {symbol_scope} {execution_timeframe}",
+                    completed=replay_engine.cursor.processed_steps,
                     total=total_steps,
                     status="running",
                 )
@@ -312,26 +360,26 @@ class BacktestRunner:
                     status="running",
                     phase="running backtest",
                     detail=(
-                        f"{symbol} {execution_timeframe} | "
+                        f"{symbol_scope} {execution_timeframe} | "
                         f"simulated {simulated_at.isoformat()} | "
-                        f"step {replay_engine.cursor.index:,} / {total_steps:,}"
+                        f"step {replay_engine.cursor.processed_steps:,} / {total_steps:,}"
                     ),
                 )
                 self._emit(
                     "metrics",
                     metrics=self._build_runtime_metrics(
-                        symbol=symbol,
+                        symbol=symbol_scope,
                         start_date=start_date,
                         end_date=end_date,
                         total_steps=total_steps,
-                        steps_done=replay_engine.cursor.index,
+                        steps_done=replay_engine.cursor.processed_steps,
                         simulated_at=simulated_at,
                         simulated_progress=simulated_progress,
                         steps_per_second=steps_per_second,
                         eta_seconds=eta_seconds,
                         runtime=runtime,
                         latest_trade=latest_trade,
-                        gap_windows=len(gap_windows),
+                        gap_windows=len(gap_windows_all),
                         gap_blocked_steps=gap_blocked_steps,
                         gap_forced_exits=gap_forced_exits,
                         rejection_counts=rejection_counts,
@@ -349,14 +397,15 @@ class BacktestRunner:
                         ),
                         level="success" if trade.realized_r >= 0 else "warning",
                     )
-            if backtest_cfg.enabled and replay_engine.cursor.index % save_every == 0:
+            if backtest_cfg.enabled and replay_engine.cursor.processed_steps % save_every == 0:
                 checkpoint_store.write(
                     {
-                        "symbol": symbol,
+                        "symbol": symbol_scope,
+                        "symbols": list(symbols),
                         "execution_timeframe": execution_timeframe,
                         "start_date": start_date,
                         "end_date": end_date,
-                        "next_index": replay_engine.cursor.index,
+                        "next_index": replay_engine.cursor.processed_steps,
                         "closed_trades": len(runtime.portfolio_manager.closed_trades),
                         "equity": runtime.portfolio_manager.current_equity,
                         "resume_signature": resume_signature,
@@ -371,22 +420,23 @@ class BacktestRunner:
             phase="backtest complete",
             detail=str(output_dir),
             metrics={
-                "steps": replay_engine.cursor.index,
+                "steps": replay_engine.cursor.processed_steps,
                 "closed_trades": len(runtime.portfolio_manager.closed_trades),
                 "equity": f"{runtime.portfolio_manager.current_equity:.2f}",
                 "realized_pnl": f"{runtime.portfolio_manager.realized_pnl:.2f}",
-                "gap_windows": len(gap_windows),
+                "gap_windows": len(gap_windows_all),
                 "gap_blocked_steps": gap_blocked_steps,
                 "gap_forced_exits": gap_forced_exits,
             },
         )
         checkpoint_store.write(
             {
-                "symbol": symbol,
+                "symbol": symbol_scope,
+                "symbols": list(symbols),
                 "execution_timeframe": execution_timeframe,
                 "start_date": start_date,
                 "end_date": end_date,
-                "next_index": replay_engine.cursor.index,
+                "next_index": replay_engine.cursor.processed_steps,
                 "closed_trades": len(runtime.portfolio_manager.closed_trades),
                 "equity": runtime.portfolio_manager.current_equity,
                 "resume_signature": resume_signature,
@@ -395,20 +445,65 @@ class BacktestRunner:
             }
         )
 
+        daily_rows = daily_summary_logger.write_all(
+            runtime.portfolio_manager.closed_trades,
+            timezone_name=self.config.system.sessions.timezone,
+            starting_equity=self.config.system.account.initial_equity,
+            good_day_threshold_r=self.config.risk.risk.good_day_threshold_r,
+        )
+        diagnostics_logger.write(
+            self._build_diagnostics_payload(
+                symbol=symbol_scope,
+                execution_timeframe=execution_timeframe,
+                start_date=start_date,
+                end_date=end_date,
+                runtime=runtime,
+                total_steps=total_steps,
+                steps_processed=replay_engine.cursor.processed_steps,
+                scanner_state_counts=scanner_state_counts,
+                accepted_signal_counts=accepted_signal_counts,
+                accepted_quality_counts=accepted_quality_counts,
+                accepted_session_counts=accepted_session_counts,
+                accepted_market_state_counts=accepted_market_state_counts,
+                rejection_counts=rejection_counts,
+                gap_windows=len(gap_windows_all),
+                gap_blocked_steps=gap_blocked_steps,
+                gap_forced_exits=gap_forced_exits,
+                daily_rows=daily_rows,
+            )
+        )
+
         return BacktestSummary(
-            symbol=symbol,
+            symbol=symbol_scope,
             execution_timeframe=execution_timeframe,
             start_date=start_date,
             end_date=end_date,
-            steps_processed=replay_engine.cursor.index,
+            steps_processed=replay_engine.cursor.processed_steps,
             closed_trades=len(runtime.portfolio_manager.closed_trades),
             current_equity=runtime.portfolio_manager.current_equity,
             realized_pnl=runtime.portfolio_manager.realized_pnl,
             output_dir=output_dir,
-            gap_windows=len(gap_windows),
+            gap_windows=len(gap_windows_all),
             gap_blocked_steps=gap_blocked_steps,
             gap_forced_exits=gap_forced_exits,
         )
+
+    def _resolve_symbols(
+        self,
+        *,
+        symbol: str | None,
+        symbols: tuple[str, ...] | None,
+    ) -> tuple[str, ...]:
+        if symbols:
+            normalized = tuple(str(item).strip().upper() for item in symbols if str(item).strip())
+            if normalized:
+                return tuple(dict.fromkeys(normalized))
+        return self.config.system.market.resolved_symbols(symbol)
+
+    def _symbol_scope_label(self, symbols: tuple[str, ...]) -> str:
+        if len(symbols) == 1:
+            return symbols[0]
+        return "__".join(symbols)
 
     def _parse_history_timestamp(self, value: str) -> datetime:
         return datetime.fromisoformat(value.strip().replace(" ", "T")).replace(tzinfo=timezone.utc)
@@ -442,6 +537,7 @@ class BacktestRunner:
             simulated_at,
             self.config.system.sessions.timezone,
         )
+        profile = self.config.strategy.resolve_profile(self.config.system.market.execution_timeframe)
         metrics: dict[str, object] = {
             "symbol": symbol,
             "range": f"{start_date} -> {end_date}",
@@ -458,6 +554,7 @@ class BacktestRunner:
             "closed_trades": len(runtime.portfolio_manager.closed_trades),
             "equity": f"{runtime.portfolio_manager.current_equity:.2f}",
             "realized_pnl": f"{runtime.portfolio_manager.realized_pnl:.2f}",
+            "trigger_timeframe": profile.trigger_timeframe,
             "gap_windows": gap_windows,
             "gap_blocked_steps": gap_blocked_steps,
             "gap_forced_exits": gap_forced_exits,
@@ -476,6 +573,14 @@ class BacktestRunner:
         reason = reasons[0] if reasons else "scanner blocked without explicit reason"
         rejection_counts[f"scanner: {reason}"] += 1
 
+    def _register_scanner_state(self, *, scanner_state_counts: dict[str, int], payload) -> None:
+        if payload is None:
+            return
+        state = getattr(payload, "state", None)
+        if state is None:
+            return
+        scanner_state_counts[str(getattr(state, "value", state))] += 1
+
     def _register_health_rejection(self, *, rejection_counts: dict[str, int], payload) -> None:
         if not isinstance(payload, dict):
             return
@@ -483,15 +588,42 @@ class BacktestRunner:
         message = str(payload.get("message", "")).strip()
         if not stage or not message:
             return
-        if stage not in {"strategy_block", "daily_guard", "entry_validation", "gap_guard"}:
+        if stage not in {"strategy_block", "daily_guard", "entry_validation", "gap_guard", "portfolio_guard"}:
             return
         rejection_counts[f"{stage}: {message}"] += 1
+
+    def _register_signal_acceptance(
+        self,
+        *,
+        accepted_signal_counts: dict[str, int],
+        accepted_quality_counts: dict[str, int],
+        accepted_session_counts: dict[str, int],
+        accepted_market_state_counts: dict[str, int],
+        payload,
+    ) -> None:
+        if payload is None:
+            return
+        metadata = getattr(payload, "metadata", {}) or {}
+        execution_band = str(metadata.get("setup_execution_band", "unknown"))
+        quality_label = str(metadata.get("setup_quality_label", "unknown"))
+        session_name = str(metadata.get("session_name", "unknown"))
+        market_state = str(metadata.get("market_state", "unknown"))
+        accepted_signal_counts[execution_band] += 1
+        accepted_quality_counts[quality_label] += 1
+        accepted_session_counts[session_name] += 1
+        accepted_market_state_counts[market_state] += 1
 
     def _top_rejections(self, rejection_counts: dict[str, int], limit: int = 3) -> list[tuple[str, int]]:
         return sorted(
             rejection_counts.items(),
             key=lambda item: (-item[1], item[0]),
         )[:limit]
+
+    def _sorted_counts(self, counts: dict[str, int]) -> list[dict[str, object]]:
+        return [
+            {"label": label, "count": count}
+            for label, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        ]
 
     def _format_duration(self, seconds: float | None) -> str:
         if seconds is None:
@@ -505,15 +637,106 @@ class BacktestRunner:
             return f"{minutes}m {secs:02d}s"
         return f"{secs}s"
 
-    def _resume_signature(self, *, symbol: str, execution_timeframe: str) -> dict[str, object]:
+    def _build_diagnostics_payload(
+        self,
+        *,
+        symbol: str,
+        execution_timeframe: str,
+        start_date: str,
+        end_date: str,
+        runtime,
+        total_steps: int,
+        steps_processed: int,
+        scanner_state_counts: dict[str, int],
+        accepted_signal_counts: dict[str, int],
+        accepted_quality_counts: dict[str, int],
+        accepted_session_counts: dict[str, int],
+        accepted_market_state_counts: dict[str, int],
+        rejection_counts: dict[str, int],
+        gap_windows: int,
+        gap_blocked_steps: int,
+        gap_forced_exits: int,
+        daily_rows: list[dict[str, object]],
+    ) -> dict[str, object]:
+        trade_days = len(daily_rows)
+        calendar_days = max(
+            1,
+            (
+                self._parse_history_timestamp(end_date).astimezone(ZoneInfo(self.config.system.sessions.timezone)).date()
+                - self._parse_history_timestamp(start_date).astimezone(ZoneInfo(self.config.system.sessions.timezone)).date()
+            ).days,
+        )
+        daily_trade_counts = [int(row["closed_trades"]) for row in daily_rows]
+        daily_r_values = [float(row["realized_r"]) for row in daily_rows]
+        good_day_threshold = self.config.risk.risk.good_day_threshold_r
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "symbol": symbol,
+            "execution_timeframe": execution_timeframe,
+            "start_date": start_date,
+            "end_date": end_date,
+            "steps_processed": steps_processed,
+            "total_steps": total_steps,
+            "progress_pct": 0.0 if total_steps == 0 else steps_processed / total_steps,
+            "closed_trades": len(runtime.portfolio_manager.closed_trades),
+            "current_equity": runtime.portfolio_manager.current_equity,
+            "realized_pnl": runtime.portfolio_manager.realized_pnl,
+            "gap_windows": gap_windows,
+            "gap_blocked_steps": gap_blocked_steps,
+            "gap_forced_exits": gap_forced_exits,
+            "scanner_state_counts": self._sorted_counts(scanner_state_counts),
+            "accepted_signal_bands": self._sorted_counts(accepted_signal_counts),
+            "accepted_quality_labels": self._sorted_counts(accepted_quality_counts),
+            "accepted_sessions": self._sorted_counts(accepted_session_counts),
+            "accepted_market_states": self._sorted_counts(accepted_market_state_counts),
+            "rejection_counts": self._sorted_counts(rejection_counts),
+            "cadence": {
+                "calendar_days_in_range": calendar_days,
+                "trade_days": trade_days,
+                "avg_trades_per_calendar_day": (
+                    0.0
+                    if calendar_days == 0
+                    else len(runtime.portfolio_manager.closed_trades) / calendar_days
+                ),
+                "avg_trades_per_trade_day": (
+                    0.0
+                    if trade_days == 0
+                    else len(runtime.portfolio_manager.closed_trades) / trade_days
+                ),
+                "median_trades_per_trade_day": 0.0 if not daily_trade_counts else median(daily_trade_counts),
+                "max_trades_in_one_day": 0 if not daily_trade_counts else max(daily_trade_counts),
+                "days_with_8_to_12_trades": sum(
+                    1 for count in daily_trade_counts if 8 <= count <= 12
+                ),
+                "days_with_at_least_8_trades": sum(1 for count in daily_trade_counts if count >= 8),
+                "days_hitting_good_day_threshold_r": sum(
+                    1 for value in daily_r_values if value >= good_day_threshold
+                ),
+                "avg_realized_r_per_trade_day": (
+                    0.0 if not daily_r_values else sum(daily_r_values) / len(daily_r_values)
+                ),
+            },
+        }
+
+    def _resume_signature(self, *, symbols: tuple[str, ...], execution_timeframe: str) -> dict[str, object]:
         profile = self.config.strategy.resolve_profile(execution_timeframe)
         return {
             "mode": "backtest",
-            "symbol": symbol,
+            "symbols": list(symbols),
+            "symbol_scope": self._symbol_scope_label(symbols),
             "execution_timeframe": execution_timeframe,
             "base_timeframe": self.config.system.market.base_timeframe,
             "starting_equity": float(self.config.system.account.initial_equity),
             "profile_name": profile.name,
+            "profile_scanner": asdict(profile.scanner),
+            "profile_trigger": asdict(profile.trigger),
+            "quality_filter": asdict(self.config.strategy.filters.quality),
+            "context_filter": asdict(self.config.strategy.filters.context),
+            "market_state_filter": asdict(self.config.strategy.filters.market_state),
+            "session_filter": asdict(self.config.strategy.filters.session),
+            "risk_limits": asdict(self.config.risk.risk),
+            "session_timezone": self.config.system.sessions.timezone,
+            "active_windows": [asdict(window) for window in self.config.system.sessions.active_windows],
             "risk_per_trade": float(self.config.risk.risk.risk_per_trade),
             "gap_aware": bool(self.config.system.backtest.gap_aware),
             "force_flat_before_gap": bool(self.config.system.backtest.force_flat_before_gap),
@@ -527,67 +750,106 @@ class BacktestRunner:
     def _fast_forward(
         self,
         *,
-        replay_engine: ReplayEngine,
+        replay_engine: MultiAssetReplayEngine,
         runtime,
-        gap_policies: dict[int, GapStepPolicy],
+        selector: SignalSelector,
+        gap_policies_by_symbol: dict[str, dict[int, GapStepPolicy]],
         steps: int,
     ) -> tuple[int, int]:
         blocked_steps = 0
         forced_exits = 0
-        for _ in range(steps):
-            result, policy, forced_exit = self._advance_one_step(
+        while replay_engine.has_next() and replay_engine.cursor.processed_steps < steps:
+            results, batch_blocked_steps, batch_forced_exits = self._advance_batch(
                 replay_engine=replay_engine,
                 runtime=runtime,
-                gap_policies=gap_policies,
+                selector=selector,
+                gap_policies_by_symbol=gap_policies_by_symbol,
                 emit_gap_events=False,
             )
-            if result is None:
+            if not results:
                 break
-            if policy is not None:
-                blocked_steps += 1
-            if forced_exit:
-                forced_exits += 1
+            blocked_steps += batch_blocked_steps
+            forced_exits += batch_forced_exits
         return blocked_steps, forced_exits
 
-    def _advance_one_step(
+    def _advance_batch(
         self,
         *,
-        replay_engine: ReplayEngine,
+        replay_engine: MultiAssetReplayEngine,
         runtime,
-        gap_policies: dict[int, GapStepPolicy],
+        selector: SignalSelector,
+        gap_policies_by_symbol: dict[str, dict[int, GapStepPolicy]],
         emit_gap_events: bool,
     ):
-        step_index = replay_engine.cursor.index
-        snapshot = replay_engine.step()
-        if snapshot is None:
-            return None, None, False
-        policy = gap_policies.get(step_index)
-        allow_new_entries = policy is None or not policy.block_entries
-        if policy is not None and emit_gap_events:
-            runtime.event_bus.publish(
-                Event(
-                    EventTopic.HEALTH,
-                    {
-                        "stage": "gap_guard",
-                        "execution_index": step_index,
-                        "gap_ids": policy.gap_ids,
-                        "phases": policy.phases,
-                        "message": " | ".join(policy.messages),
-                    },
+        batch = replay_engine.step_batch()
+        if not batch:
+            return (), 0, 0
+
+        blocked_steps = 0
+        forced_exits = 0
+        pending_signals = []
+        results: list[tuple[object, tuple[ManagementDecision, ...]]] = []
+
+        for step in batch:
+            snapshot = step.snapshot
+            policy = gap_policies_by_symbol.get(step.symbol, {}).get(step.execution_index)
+            allow_new_entries = policy is None or not policy.block_entries
+            if policy is not None:
+                blocked_steps += 1
+                if emit_gap_events:
+                    runtime.event_bus.publish(
+                        Event(
+                            EventTopic.HEALTH,
+                            {
+                                "stage": "gap_guard",
+                                "symbol": step.symbol,
+                                "execution_index": step.execution_index,
+                                "gap_ids": policy.gap_ids,
+                                "phases": policy.phases,
+                                "message": " | ".join(policy.messages),
+                            },
+                        )
+                    )
+
+            management_decisions = runtime.engine.manage_snapshot(snapshot)
+            forced_exit = False
+            if policy is not None and policy.force_flat:
+                forced_exit = self._force_gap_exit(
+                    runtime=runtime,
+                    snapshot=snapshot,
+                    policy=policy,
+                )
+            if forced_exit:
+                forced_exits += 1
+
+            evaluation = runtime.engine.evaluate_entry_candidate(snapshot, allow_new_entries=allow_new_entries)
+            if evaluation.signal is not None:
+                pending_signals.append((evaluation, evaluation.signal))
+            results.append((evaluation, management_decisions))
+
+        ranked = selector.select(tuple(signal for _, signal in pending_signals))
+        selected_by_symbol = {item.signal.symbol: item for item in ranked}
+
+        finalized_results = []
+        for evaluation, management_decisions in results:
+            risk_plan = None
+            selected = selected_by_symbol.get(evaluation.snapshot.symbol)
+            if selected is not None:
+                risk_plan = runtime.engine.execute_signal(selected.signal, risk_plan=selected.risk_plan)
+            finalized_results.append(
+                EngineCycleResult(
+                    snapshot=evaluation.snapshot,
+                    scanner_decision=evaluation.scanner_decision,
+                    signal=evaluation.signal,
+                    risk_plan=risk_plan,
+                    management_decisions=management_decisions,
+                    portfolio=runtime.portfolio_manager.snapshot(),
                 )
             )
-        result = runtime.engine.process_snapshot(snapshot, allow_new_entries=allow_new_entries)
-        forced_exit = False
-        if policy is not None and policy.force_flat:
-            forced_exit = self._force_gap_exit(
-                runtime=runtime,
-                snapshot=snapshot,
-                policy=policy,
-            )
-        return result, policy, forced_exit
+        return tuple(finalized_results), blocked_steps, forced_exits
 
     def _force_gap_exit(self, *, runtime, snapshot, policy: GapStepPolicy) -> bool:
-        position = runtime.portfolio_manager.active_position
+        position = runtime.portfolio_manager.position_for_symbol(snapshot.symbol)
         latest_candle = snapshot.latest(self.config.system.market.execution_timeframe)
         if position is None or latest_candle is None:
             return False
@@ -622,6 +884,7 @@ class BacktestRunner:
     def _build_gap_policy(
         self,
         *,
+        symbol: str,
         df_1m,
         execution_series,
         execution_timeframe: str,
@@ -694,6 +957,7 @@ class BacktestRunner:
                 blocked_end_index = previous_execution_index
 
             window = BacktestGapWindow(
+                symbol=symbol,
                 gap_id=gap_id,
                 previous_base_timestamp=previous_base_timestamp,
                 next_base_timestamp=next_base_timestamp,

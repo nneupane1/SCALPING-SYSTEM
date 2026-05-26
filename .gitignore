@@ -22,3 +22,6 @@ backtest/output/
 replay/output/
 paper/output/
 live/output/
+frontend/.backtest-viewer.log
+frontend/.research-viewer.log
+frontend/.research-runners.json

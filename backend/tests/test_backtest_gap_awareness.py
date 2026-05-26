@@ -51,6 +51,7 @@ class BacktestGapAwarenessTests(unittest.TestCase):
             )
 
             windows, policies = runner._build_gap_policy(
+                symbol="BTCUSDT",
                 df_1m=df,
                 execution_series=execution_series,
                 execution_timeframe="5m",

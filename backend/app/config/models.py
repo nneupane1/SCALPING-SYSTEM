@@ -118,6 +118,7 @@ class MarketConfig:
     execution_timeframe: str
     context_timeframes: tuple[str, ...] = ()
     supported_execution_timeframes: tuple[str, ...] = ()
+    watchlist_symbols: tuple[str, ...] = ()
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "MarketConfig":
@@ -127,13 +128,29 @@ class MarketConfig:
             str(item)
             for item in payload.get("supported_execution_timeframes", [execution_timeframe])
         )
+        primary_symbol = str(_require(payload, "symbol")).upper()
+        configured_watchlist = tuple(
+            str(item).upper()
+            for item in payload.get("watchlist_symbols", [])
+        )
+        watchlist = tuple(dict.fromkeys((primary_symbol, *configured_watchlist)))
         return cls(
-            symbol=str(_require(payload, "symbol")).upper(),
+            symbol=primary_symbol,
             base_timeframe=str(_require(payload, "base_timeframe")),
             execution_timeframe=execution_timeframe,
             context_timeframes=context_timeframes,
             supported_execution_timeframes=supported,
+            watchlist_symbols=watchlist,
         )
+
+    def resolved_symbols(self, override: str | None = None) -> tuple[str, ...]:
+        if override:
+            raw = [item.strip().upper() for item in str(override).split(",") if item.strip()]
+            if raw:
+                return tuple(dict.fromkeys(raw))
+        if self.watchlist_symbols:
+            return self.watchlist_symbols
+        return (self.symbol,)
 
 
 @dataclass(frozen=True)
@@ -480,7 +497,9 @@ class ScannerConfig:
 class StrategyTriggerConfig:
     """Trigger-quality requirements for the entry candle."""
 
+    timeframe: str = "execution"
     require_breakout_close: bool = True
+    reference_lookback_bars: int = 5
     min_close_position: float = 0.7
     min_body_ratio: float = 1.2
     max_body_ratio: float = 4.0
@@ -491,7 +510,9 @@ class StrategyTriggerConfig:
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "StrategyTriggerConfig":
         return cls(
+            timeframe=str(payload.get("timeframe", "execution")),
             require_breakout_close=_as_bool(payload.get("require_breakout_close", True)),
+            reference_lookback_bars=int(payload.get("reference_lookback_bars", 5)),
             min_close_position=float(payload.get("min_close_position", 0.7)),
             min_body_ratio=float(payload.get("min_body_ratio", 1.2)),
             max_body_ratio=float(payload.get("max_body_ratio", 4.0)),
@@ -604,11 +625,13 @@ class StrategyFilterConfig:
         """Setup grading rules used to scale risk without changing the setup pattern."""
 
         enabled: bool = True
-        minimum_score: float = 0.42
-        marginal_score: float = 0.55
+        minimum_score: float = 0.3
+        marginal_score: float = 0.48
         strong_score: float = 0.72
         min_risk_multiplier: float = 0.7
         max_risk_multiplier: float = 1.2
+        allow_secondary_entries: bool = True
+        secondary_risk_ceiling: float = 0.88
 
         @classmethod
         def from_mapping(
@@ -617,11 +640,13 @@ class StrategyFilterConfig:
         ) -> "StrategyFilterConfig.QualityConfig":
             return cls(
                 enabled=_as_bool(payload.get("enabled", True)),
-                minimum_score=float(payload.get("minimum_score", 0.42)),
-                marginal_score=float(payload.get("marginal_score", 0.55)),
+                minimum_score=float(payload.get("minimum_score", 0.3)),
+                marginal_score=float(payload.get("marginal_score", 0.48)),
                 strong_score=float(payload.get("strong_score", 0.72)),
                 min_risk_multiplier=float(payload.get("min_risk_multiplier", 0.7)),
                 max_risk_multiplier=float(payload.get("max_risk_multiplier", 1.2)),
+                allow_secondary_entries=_as_bool(payload.get("allow_secondary_entries", True)),
+                secondary_risk_ceiling=float(payload.get("secondary_risk_ceiling", 0.88)),
             )
 
     @dataclass(frozen=True)
@@ -733,6 +758,13 @@ class TimeframeProfileConfig:
     trigger: StrategyTriggerConfig
     cadence: TimeframeCadenceConfig = field(default_factory=TimeframeCadenceConfig)
 
+    @property
+    def trigger_timeframe(self) -> str:
+        configured = self.trigger.timeframe.strip().lower()
+        if configured in {"", "execution"}:
+            return self.execution_timeframe
+        return self.trigger.timeframe
+
     @classmethod
     def from_mapping(
         cls,
@@ -820,8 +852,10 @@ class RiskLimitsConfig:
     max_daily_loss_r: float = 3.0
     max_consecutive_losses: int = 4
     max_trades_per_day: int = 15
+    max_total_open_risk_fraction: float = 0.01
     min_stop_distance_ratio: float = 0.0005
     max_position_notional: float | None = None
+    max_positions_per_symbol: int = 1
     minimum_closed_trades_for_day_scaling: int = 2
     good_day_threshold_r: float = 1.0
     good_day_risk_multiplier: float = 1.05
@@ -837,8 +871,10 @@ class RiskLimitsConfig:
             max_daily_loss_r=float(payload.get("max_daily_loss_r", 3.0)),
             max_consecutive_losses=int(payload.get("max_consecutive_losses", 4)),
             max_trades_per_day=int(payload.get("max_trades_per_day", 15)),
+            max_total_open_risk_fraction=float(payload.get("max_total_open_risk_fraction", 0.01)),
             min_stop_distance_ratio=float(payload.get("min_stop_distance_ratio", 0.0005)),
             max_position_notional=None if max_notional is None else float(max_notional),
+            max_positions_per_symbol=int(payload.get("max_positions_per_symbol", 1)),
             minimum_closed_trades_for_day_scaling=int(payload.get("minimum_closed_trades_for_day_scaling", 2)),
             good_day_threshold_r=float(payload.get("good_day_threshold_r", 1.0)),
             good_day_risk_multiplier=float(payload.get("good_day_risk_multiplier", 1.05)),

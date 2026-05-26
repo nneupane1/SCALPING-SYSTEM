@@ -434,12 +434,19 @@ class ForwardRunner:
             for item in payload.get("closed_trades", [])
             if isinstance(item, dict)
         ]
-        active_position = payload.get("active_position")
-        portfolio.active_position = (
-            self._deserialize_open_position(active_position)
-            if isinstance(active_position, dict)
-            else None
-        )
+        portfolio.active_positions_by_symbol.clear()
+        active_positions_payload = payload.get("active_positions")
+        if isinstance(active_positions_payload, list):
+            for item in active_positions_payload:
+                if isinstance(item, dict):
+                    position = self._deserialize_open_position(item)
+                    portfolio.active_positions_by_symbol[position.symbol] = position
+        else:
+            active_position = payload.get("active_position")
+            if isinstance(active_position, dict):
+                position = self._deserialize_open_position(active_position)
+                portfolio.active_positions_by_symbol[position.symbol] = position
+        portfolio._refresh_active_position_alias()
 
     def _serialize_portfolio_state(self, portfolio_manager) -> dict[str, Any]:
         return {
@@ -449,6 +456,10 @@ class ForwardRunner:
             "win_count": portfolio_manager.win_count,
             "loss_count": portfolio_manager.loss_count,
             "closed_trades": [self._serialize_closed_trade(trade) for trade in portfolio_manager.closed_trades],
+            "active_positions": [
+                self._serialize_open_position(position)
+                for position in portfolio_manager.active_positions()
+            ],
             "active_position": (
                 self._serialize_open_position(portfolio_manager.active_position)
                 if portfolio_manager.active_position is not None

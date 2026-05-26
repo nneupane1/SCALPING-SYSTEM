@@ -3,6 +3,7 @@ export type BacktestStatus = "idle" | "running" | "paused" | "completed";
 export type BacktestProgress = {
   nextIndex: number;
   totalRows: number;
+  chartRows: number;
   progressPct: number;
   simulatedTime: string | null;
   checkpointUpdatedAt: string | null;
@@ -53,6 +54,7 @@ export type BacktestTrade = {
 };
 
 export type GapWindow = {
+  symbol: string;
   gapId: number;
   previousBaseTimestamp: string;
   nextBaseTimestamp: string;
@@ -79,8 +81,21 @@ export type BreakdownStat = {
   totalR: number;
 };
 
+export type SymbolPerformanceStat = {
+  symbol: string;
+  trades: number;
+  winRate: number;
+  avgR: number;
+  totalR: number;
+  realizedPnl: number;
+  latestTradeAt: string | null;
+};
+
 export type BacktestSummaryView = {
   symbol: string;
+  symbolScope: string;
+  symbols: string[];
+  activeSymbol: string;
   executionTimeframe: string;
   startDate: string | null;
   endDate: string | null;
@@ -94,6 +109,8 @@ export type BacktestSummaryView = {
   worstTradeR: number;
   maxDrawdown: number;
   gapWindows: number;
+  watchlistSize: number;
+  symbolBreakdown: SymbolPerformanceStat[];
   sessionBreakdown: BreakdownStat[];
   qualityBreakdown: BreakdownStat[];
   stateBreakdown: BreakdownStat[];

@@ -1,7 +1,7 @@
 """Core orchestration and shared domain objects."""
 
 from .checkpoints import JsonCheckpointStore
-from .engine import EngineCycleResult, TradingEngine
+from .engine import EngineCycleResult, SignalEvaluationResult, TradingEngine
 from .event_bus import EventBus
 from .events import Event, EventTopic
 from .models import (
@@ -37,6 +37,7 @@ __all__ = [
     "RuntimeMode",
     "ScannerDecision",
     "ScannerState",
+    "SignalEvaluationResult",
     "Side",
     "TradeSignal",
     "TradingEngine",

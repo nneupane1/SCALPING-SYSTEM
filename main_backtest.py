@@ -13,6 +13,11 @@ from backend.app.main import create_app
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the checkpointed backtest runner.")
     parser.add_argument("--symbol", default=None, help="Optional symbol override.")
+    parser.add_argument(
+        "--symbols",
+        default=None,
+        help="Optional comma-separated watchlist override, for example BTCUSDT,ETHUSDT,SOLUSDT.",
+    )
     parser.add_argument("--start-date", default=None, help="Optional start date override.")
     parser.add_argument("--end-date", default=None, help="Optional end date override.")
     parser.add_argument(
@@ -28,6 +33,8 @@ def main() -> None:
     args = parser.parse_args()
 
     app = create_app()
+    resolved_symbols = app.config.system.market.resolved_symbols(args.symbols or args.symbol)
+    symbol_scope = ", ".join(resolved_symbols)
     active_windows = " | ".join(
         f"{window.name} {window.start}-{window.end}"
         for window in app.config.system.sessions.active_windows
@@ -42,7 +49,8 @@ def main() -> None:
         dashboard.emit(
             "context",
             context={
-                "symbol": args.symbol or app.config.system.market.symbol,
+                "symbol": symbol_scope,
+                "watchlist_size": len(resolved_symbols),
                 "execution_timeframe": app.config.system.market.execution_timeframe,
                 "base_timeframe": app.config.system.market.base_timeframe,
                 "range": (
@@ -56,6 +64,7 @@ def main() -> None:
         runner = BacktestRunner(app.config, progress_callback=dashboard.emit)
         summary = runner.run(
             symbol=args.symbol,
+            symbols=resolved_symbols,
             start_date=args.start_date,
             end_date=args.end_date,
         )

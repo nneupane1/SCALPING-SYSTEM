@@ -17,6 +17,15 @@ and the long-term goal is for live trading, paper trading, and replay to share
 the same decision path while changing only the market-data source and execution
 mode.
 
+The current research stack is no longer limited to one symbol at a time. The
+system can now download and audit a watchlist, replay multiple execution tapes
+through one shared portfolio engine, rank same-timestamp signals across symbols,
+and take only the strongest opportunities that fit the configured open-risk
+budget. In plain language, the platform now follows the professional rule that
+matters most for intraday research:
+
+`scan many, trade few`
+
 ## Table of Contents
 
 - [System Overview](#system-overview)
@@ -134,6 +143,7 @@ earned, not because the trade has spent several candles above that level.
 | `frontend/lib/` | Client-side API and WebSocket utilities |
 | `infra/` | Deployment assets such as containers, compose files, and environment templates |
 | `main_download.py` | CLI entry point for checkpointed Binance history downloads |
+| `main_download_watchlist.py` | CLI entry point for watchlist-wide checkpointed history downloads |
 | `main_resample.py` | CLI entry point for rebuilding higher timeframes from canonical `1m` data |
 | `main_paper.py` | CLI entry point for checkpointed forward paper-trading loops |
 | `main_live.py` | CLI entry point for checkpointed forward live-scanning loops |
@@ -234,6 +244,40 @@ those frames available to replay and backtest runners. The backtest runner then
 uses the same replay engine and trading engine contracts already present in the
 real-time architecture, but wraps them in CSV logging and periodic checkpoints
 so multi-step historical simulations can resume deterministically.
+
+The research path is now also explicitly `watchlist-aware`. Instead of assuming
+that one symbol must carry the entire frequency burden, the system can download
+multiple canonical `1m` histories, resample each symbol independently, merge the
+execution timeline into one deterministic multi-asset replay, and route all
+candidate signals through a portfolio selector. That selector enforces account
+constraints such as maximum simultaneous positions, maximum total open risk, and
+maximum positions per symbol before any signal is executed. In other words, the
+research loop has moved from “does BTC alone produce enough opportunities?” to
+“given a professional watchlist, which setups would the shared account actually
+take?”
+
+### Watchlist Research Flow
+
+```mermaid
+flowchart LR
+    A[Watchlist symbols] --> B[Checkpointed 1m downloads]
+    B --> C[Per-symbol resample 5m / 15m]
+    C --> D[Merged multi-asset replay clock]
+    D --> E[Scanner + strategy per symbol]
+    E --> F[Cross-symbol ranking]
+    F --> G[Portfolio risk gate]
+    G --> H[Top-N execution only]
+    H --> I[Aggregate equity + symbol drilldown]
+```
+
+| Stage | What happens | Why it matters |
+| --- | --- | --- |
+| `1` | download canonical `1m` data for each symbol | ensures every derived frame comes from the same timing truth |
+| `2` | audit data quality and gap structure | prevents corrupted history from quietly polluting the backtest |
+| `3` | rebuild `5m` and `15m` from `1m` | avoids stale or inconsistent higher-timeframe files |
+| `4` | replay all execution candles under one portfolio clock | creates a realistic same-account competition between symbols |
+| `5` | rank signals by setup quality, context, and regime | prevents correlated overtrading |
+| `6` | execute only the best setups that fit account risk | turns a watchlist into a portfolio instead of a signal flood |
 
 ## Mode Model
 
@@ -636,6 +680,25 @@ runner writes `trades.csv` and `equity.csv` outputs, and it periodically stores
 the next replay index in a checkpoint file so a long historical pass can resume
 without discarding previous progress.
 
+That path is now materially stronger than a simple single-symbol replay. The
+runner can accept a comma-separated watchlist, build a candle universe for each
+symbol, merge all execution candles into one replay clock, and evaluate the
+scanner and strategy independently per symbol at each timestamp. If several
+symbols qualify at once, the portfolio selector ranks them and executes only the
+subset that satisfies shared account constraints. This is the key difference
+between a portfolio-aware intraday backtest and a naive loop over multiple CSVs.
+
+### Backtest Decision Stack
+
+| Layer | Current implementation | Research role |
+| --- | --- | --- |
+| Canonical data | `1m` Binance history per symbol | one trusted source of truth |
+| Structural setup | `5m` execution profile | impulse, pullback, resumed imbalance |
+| Soft context | `15m` | regime interpretation and confidence shaping |
+| Micro trigger | `1m` inside the current `5m` bar | more precise entry timing without switching the event clock |
+| Portfolio gate | selector + risk caps | choose the best setup instead of all setups |
+| Gap guard | outage windows per symbol | block entries and force-flat around real history discontinuities |
+
 The console surface for that runner is no longer limited to a static "it is
 running" message. During a historical pass, the backtest dashboard now switches
 from the preparation stage into a live execution heartbeat and exposes the
@@ -654,6 +717,19 @@ tries to improve operator flow by opening the browser viewer automatically. If
 If not, it attempts to start `npm run dev` inside `frontend/`, waits for the
 route to respond, and then opens the browser. Use `python main_backtest.py
 --no-viewer` to disable that behavior explicitly.
+
+The outputs from that run are now intentionally split into two observational
+layers:
+
+- `portfolio truth`
+  - aggregate equity, drawdown, cadence, closed trades, rejection counts
+- `symbol drilldown`
+  - which symbols contributed trades
+  - which symbol is currently selected in the UI chart
+  - how each symbol behaved inside the same shared account pass
+
+That split is deliberate. Portfolio performance tells you whether the research
+goal is viable. Symbol drilldown tells you where the edge is actually living.
 
 ## Post-Backtest Validation
 
@@ -783,6 +859,40 @@ surface with deep zoom, synchronized multi-pane crosshair behavior, or full
 multi-year virtual scrolling, but it is now a real backtest operator view
 rather than a static mock.
 
+The frontend is now also aligned with the watchlist backtest architecture.
+`/backtest` is no longer forced to pretend that a portfolio run is one BTC
+chart. The page now separates:
+
+| UI surface | Purpose |
+| --- | --- |
+| `portfolio scope` | total progress, aggregate equity, drawdown, session/quality/state breakdowns |
+| `watchlist lane` | one card per symbol with trades, win rate, total `R`, realized PnL, and latest close |
+| `chart focus` | symbol-specific candle, volume, equity, trade-marker, and gap-window view |
+| `research control` | launch a backtest with a watchlist, choose a replay focus symbol, and jump between pages |
+| `PnL ledger` | aggregate closed-trade table with symbol-level visibility |
+
+### Frontend Research Map
+
+```mermaid
+flowchart TD
+    A[/] --> B[/backtest]
+    A --> C[/replay]
+    A --> D[/dashboard?mode=paper]
+    A --> E[/dashboard?mode=live]
+    B --> F[Aggregate portfolio state]
+    B --> G[Watchlist lane]
+    B --> H[Selected symbol chart]
+    B --> I[PnL ledger]
+    B --> C
+```
+
+The important ergonomic principle is that the interface should feel like a
+research desk, not a collection of disjointed pages. The home route acts as the
+mission-control hub. The mode rail stays available everywhere. The backtest page
+keeps portfolio truth and symbol truth in one place. Replay remains a focused
+single-symbol audit surface. Paper and live stay mode-aware because their data
+priorities are different from historical research.
+
 ## Message Bus Guidance
 
 For the current architecture, RabbitMQ or Kafka is not the next priority. The
@@ -855,11 +965,15 @@ Historical data artifacts:
 - `data_storage/<symbol>/1m/*.csv` for canonical one-minute history
 - `data_storage/<symbol>/<timeframe>/*.csv` for resampled derived frames
 - `data_storage/<symbol>/<interval>/_checkpoints/*.checkpoint.json` for download resume state
+- `audit/output/*.json` and `audit/output/*_gap_ranges_*.csv` for data-quality and gap forensics
 
 Research artifacts:
 
 - `backtest/output/trades.csv`
 - `backtest/output/equity.csv`
+- `backtest/output/daily_summary.csv`
+- `backtest/output/diagnostics.json`
+- `backtest/output/gap_windows.csv`
 - `backtest/output/_checkpoints/*.checkpoint.json`
 - `replay/output/_checkpoints/*.checkpoint.json`
 - `paper/output/trades.csv`
@@ -905,7 +1019,7 @@ Current boundaries:
 - live mode now supports authenticated Binance spot order routing, websocket-driven market ingestion, and private user-data reconciliation, but the supported production path is currently long-only spot execution; opening short positions still belongs to paper/research paths
 - live mode now performs exchange metadata checks before submission, including symbol status, supported order types, precision rounding, and notional validation, but it should still be treated as an early production path rather than a battle-hardened execution stack
 - database-backed persistence is not implemented yet
-- the frontend is a typed mock console, not a live Next.js-integrated application yet
+- the frontend is now a real Next.js operator surface for backtest, replay, paper, and live monitoring, but it is still not a complete TradingView-class workstation
 - FastAPI transport wiring is not implemented yet; API routes and WebSocket broadcasting are placeholders
 - there is no database, no fee model, and no slippage model yet
 - daily target objectives such as `10-15` trades or `EUR 300-EUR 500` profit are not encoded as assumptions and must be validated empirically
@@ -1015,6 +1129,7 @@ The repository already exposes the intended runtime surface:
 
 ```bash
 python main_download.py
+python main_download_watchlist.py
 python main_resample.py
 python main_paper.py --polls 1
 python main_live.py --polls 1
@@ -1035,7 +1150,28 @@ disabled so the safety gate remains on until the operator explicitly chooses
 otherwise. `main_backtest.py` now also attempts to open the local `/backtest`
 viewer automatically when the frontend dependencies are already installed.
 
-### 6. Inspect the frontend shell
+### 6. Run the full historical research loop
+
+The most useful operator workflow is now:
+
+| Step | Command | Why |
+| --- | --- | --- |
+| `A` | `python main_download_watchlist.py --start-date "2018-01-01 00:00:00" --end-date "2026-05-23 00:00:00"` | download canonical `1m` history for the configured watchlist |
+| `B` | `python main_data_audit.py --symbol BTCUSDT --start-date "2018-01-01 00:00:00" --end-date "2026-05-23 00:00:00" --strict` | verify one symbol end to end before trusting the whole set |
+| `C` | `python main_backtest.py --symbols BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,AVAXUSDT --start-date "2018-01-01 00:00:00" --end-date "2026-05-23 00:00:00"` | run the portfolio-aware watchlist backtest |
+| `D` | `cd frontend && npm run dev` | open the command-center UI |
+| `E` | open `http://localhost:3000/backtest` | inspect aggregate equity and symbol drilldown live |
+
+Two practical notes:
+
+1. `main_backtest.py` already rebuilds `5m` and `15m` from canonical `1m`, so
+   you do not need to run `main_resample.py` before the backtest unless you want
+   standalone CSV inspection.
+2. If the watchlist backtest is running, the frontend should be treated as a
+   live file-backed monitor. It is reading the growing artifacts, not rerunning
+   the engine itself.
+
+### 7. Inspect the frontend shell
 
 The frontend now includes a typed Next.js shell under `frontend/` with mock
 dashboard, replay, and portfolio pages, plus a real `/backtest` route backed by
@@ -1055,9 +1191,12 @@ http://localhost:3000/backtest
 
 That route is designed for long-running historical passes. It will keep polling
 the live-growing CSV/checkpoint outputs and refresh the visual state while the
-backtest is still processing.
+backtest is still processing. In a watchlist run, the page now shows one
+aggregate account pass plus a selected-symbol tape, so you can move between
+portfolio-level truth and symbol-level structure without leaving the backtest
+workspace.
 
-### 7. Continue implementation
+### 8. Continue implementation
 
 The next engineering steps should be:
 

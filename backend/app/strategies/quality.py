@@ -18,6 +18,8 @@ class SetupQualityAssessment:
 
     score: float
     label: str
+    execution_band: str
+    accepted: bool
     risk_multiplier: float
     reasons: tuple[str, ...]
 
@@ -90,29 +92,56 @@ def assess_setup_quality(
     score = max(0.0, min(1.0, score))
     if score >= config.strong_score:
         label = "elite"
+        execution_band = "A"
+        accepted = True
     elif score >= config.marginal_score:
         label = "standard"
-    elif score >= config.minimum_score:
-        label = "marginal"
+        execution_band = "A"
+        accepted = True
+    elif score >= config.minimum_score and config.allow_secondary_entries:
+        label = "secondary"
+        execution_band = "B"
+        accepted = True
     else:
         label = "reject"
+        execution_band = "X"
+        accepted = False
 
     if not config.enabled:
+        accepted = True
+        execution_band = "A"
+        if label == "reject":
+            label = "disabled"
         risk_multiplier = 1.0
     else:
         span = max(1e-12, config.max_risk_multiplier - config.min_risk_multiplier)
         risk_multiplier = config.min_risk_multiplier + (score * span)
         risk_multiplier = max(config.min_risk_multiplier, min(config.max_risk_multiplier, risk_multiplier))
+        if accepted and execution_band == "B":
+            risk_multiplier = min(risk_multiplier, config.secondary_risk_ceiling)
+
+    if not config.enabled:
+        participation_reason = "quality filter disabled; setup forwarded without quality veto"
+    elif label == "secondary":
+        participation_reason = "secondary participation band: valid but noisier setup traded at reduced size"
+    elif label == "reject":
+        participation_reason = "setup quality floor not met"
+    else:
+        participation_reason = "primary participation band: setup is clean enough for standard deployment"
 
     reasons = (
         f"setup quality score {score:.2f}",
         f"quality tier: {label}",
+        f"participation band: {execution_band}",
         f"impulse tier: {scanner_decision.metrics.get('impulse_tier', 'unknown')}",
         f"pullback structure: {pullback_label}",
+        participation_reason,
     )
     return SetupQualityAssessment(
         score=score,
         label=label,
+        execution_band=execution_band,
+        accepted=accepted,
         risk_multiplier=risk_multiplier,
         reasons=reasons,
     )
